@@ -4159,6 +4159,16 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 ImGui::EndDisabled();
             }
 
+            if (state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12)
+            {
+                bool useUpscalerOutput = config->FGUseDx11UpscalerOutputAsHudless.value_or_default();
+                if (ImGui::Checkbox("Upscaler output as HUDless (DX11 experimental)", &useUpscalerOutput))
+                    config->FGUseDx11UpscalerOutputAsHudless = useUpscalerOutput;
+
+                ShowHelpMarker("Copies the DX11 upscaler output after evaluation and supplies it to FG as HUDless.\n"
+                               "Disable this if post-processing, colors, or UI are incorrect.");
+            }
+
             bool depthScale = config->FGEnableDepthScale.value_or_default();
             if (ImGui::Checkbox("Scale Depth to fix DLSS RR", &depthScale))
                 config->FGEnableDepthScale = depthScale;

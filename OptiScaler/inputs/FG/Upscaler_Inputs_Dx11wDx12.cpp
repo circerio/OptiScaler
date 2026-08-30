@@ -8,18 +8,50 @@
 
 using namespace OptiMath;
 static DS_Dx12* DepthScaleDx11wDx12 = nullptr;
+static bool Dx11HudlessCaptureLogged = false;
+static bool Dx11HudlessFallbackLogged = false;
+
+static Dx11WithDx12::ResourceMask GetRequiredFgResourceMask()
+{
+    return Dx11WithDx12::ResourceMask::Mv | Dx11WithDx12::ResourceMask::Depth;
+}
+
+static bool ShouldCaptureUpscalerOutputAsHudless()
+{
+    return Config::Instance()->FGUseDx11UpscalerOutputAsHudless.value_or_default();
+}
 
 static bool PrepareFgResourceCache(NVSDK_NGX_Parameter* parameters, UINT64 frameKey)
 {
     if (parameters == nullptr)
         return false;
 
-    const auto mask = Dx11WithDx12::ResourceMask::Mv | Dx11WithDx12::ResourceMask::Depth;
-    const auto dontUseNtShared = Config::Instance()->DontUseNTShared.value_or_default();
-    const auto frameIndex = Dx11WithDx12::GetUpscalerFrameIndex();
+    const auto requiredMask = GetRequiredFgResourceMask();
+    auto mask = requiredMask;
+    const bool captureHudless = ShouldCaptureUpscalerOutputAsHudless();
 
-    const auto result =
-        Dx11WithDx12::PrepareUpscalerResources(parameters, mask, frameIndex, frameKey, dontUseNtShared, false, true);
+    if (captureHudless)
+        mask |= Dx11WithDx12::ResourceMask::Output;
+
+    const auto dontUseNtShared = Config::Instance()->DontUseNTShared.value_or_default();
+    const auto frameIndex =
+        captureHudless ? (UINT) (frameKey % DX11_WITH_DX12_CACHED_FRAMES) : Dx11WithDx12::GetUpscalerFrameIndex();
+
+    auto result = Dx11WithDx12::PrepareUpscalerResources(parameters, mask, frameIndex, frameKey, dontUseNtShared, false,
+                                                         true, captureHudless);
+
+    // The upscaler output is an optional quality improvement. Keep MV/depth FG alive when it cannot be shared.
+    if (!result.Success && captureHudless)
+    {
+        if (!Dx11HudlessFallbackLogged)
+        {
+            LOG_WARN("Dx11wDx12 could not capture the upscaler output as HUDless; continuing with MV/depth only");
+            Dx11HudlessFallbackLogged = true;
+        }
+
+        result = Dx11WithDx12::PrepareUpscalerResources(parameters, requiredMask, frameIndex, frameKey, dontUseNtShared,
+                                                        false, true);
+    }
 
     if (!result.Success)
     {
@@ -32,13 +64,21 @@ static bool PrepareFgResourceCache(NVSDK_NGX_Parameter* parameters, UINT64 frame
 
 static bool ReusePreparedUpscalerCacheForFg(UINT64 frameKey)
 {
-    const auto mask = Dx11WithDx12::ResourceMask::Mv | Dx11WithDx12::ResourceMask::Depth;
+    const auto mask = GetRequiredFgResourceMask();
     const auto resolvedFrameKey = frameKey != 0 ? frameKey : Dx11WithDx12::GetLastPreparedUpscalerFrameId();
 
     if (!Dx11WithDx12::HasPreparedUpscalerResources(mask, resolvedFrameKey))
     {
         LOG_WARN("Dx11wDx12 FG input cache miss");
         return false;
+    }
+
+    if (ShouldCaptureUpscalerOutputAsHudless() &&
+        !Dx11WithDx12::HasPreparedUpscalerResources(Dx11WithDx12::ResourceMask::Output, resolvedFrameKey) &&
+        !Dx11HudlessFallbackLogged)
+    {
+        LOG_WARN("Dx11wDx12 upscaler cache has no output suitable for HUDless; continuing with MV/depth only");
+        Dx11HudlessFallbackLogged = true;
     }
 
     return true;
@@ -213,6 +253,54 @@ void UpscalerInputsDx11wDx12::UpscaleStart(NVSDK_NGX_Parameter* InParameters, IF
     ID3D12Resource* paramDepth = cache.Depth.Dx12Resource;
 
     auto cmdList = fg->GetUICommandList();
+
+    const auto cacheFrameKey = Dx11WithDx12::GetLastPreparedUpscalerFrameId();
+    if (ShouldCaptureUpscalerOutputAsHudless() &&
+        Dx11WithDx12::HasPreparedUpscalerResources(Dx11WithDx12::ResourceMask::Output, cacheFrameKey))
+    {
+        auto output = Dx11WithDx12::GetUpscalerOutputResource(Dx11WithDx12::GetUpscalerFrameIndex());
+        auto paramHudless = output != nullptr ? output->Dx12Resource : nullptr;
+
+        if (paramHudless != nullptr)
+        {
+            const auto desc = paramHudless->GetDesc();
+            const bool dimensionsMatch = desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D &&
+                                         desc.Width == feature->DisplayWidth() &&
+                                         desc.Height == feature->DisplayHeight() && desc.SampleDesc.Count == 1;
+
+            if (dimensionsMatch)
+            {
+                Dx12Resource setResource {};
+                setResource.type = FG_ResourceType::HudlessColor;
+                setResource.cmdList = cmdList;
+                setResource.resource = paramHudless;
+                setResource.width = desc.Width;
+                setResource.height = desc.Height;
+                // Native D3D11 copies cross the API boundary in COMMON. Background-D3D12 upscalers leave their
+                // output in UAV unless a game-specific restoration barrier is configured.
+                setResource.state = feature->IsWithDx12()
+                                        ? (D3D12_RESOURCE_STATES) Config::Instance()->OutputResourceBarrier.value_or(
+                                              D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+                                        : D3D12_RESOURCE_STATE_COMMON;
+                setResource.validity = FG_ResourceValidity::ValidNow;
+
+                if (fg->SetResource(&setResource) && !Dx11HudlessCaptureLogged)
+                {
+                    LOG_INFO("Dx11wDx12 is using the upscaler output as experimental HUDless input ({}x{}, format {})",
+                             desc.Width, desc.Height, (UINT) desc.Format);
+                    Dx11HudlessCaptureLogged = true;
+                }
+            }
+            else if (!Dx11HudlessFallbackLogged)
+            {
+                LOG_WARN("Dx11wDx12 skipped upscaler-output HUDless due to incompatible resource description: "
+                         "{}x{}, samples {}, expected {}x{}",
+                         desc.Width, desc.Height, desc.SampleDesc.Count, feature->DisplayWidth(),
+                         feature->DisplayHeight());
+                Dx11HudlessFallbackLogged = true;
+            }
+        }
+    }
 
     if (paramVelocity != nullptr)
     {

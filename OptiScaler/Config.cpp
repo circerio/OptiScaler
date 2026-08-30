@@ -209,6 +209,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             FGResourceFlipOffset.set_from_config(readBool("OptiFG", "ResourceFlipOffset"));
 
             FGAlwaysCaptureFSRFGSwapchain.set_from_config(readBool("OptiFG", "AlwaysCaptureFSRFGSwapchain"));
+            FGUseDx11UpscalerOutputAsHudless.set_from_config(readBool("OptiFG", "UseDx11UpscalerOutputAsHudless"));
         }
 
         {
@@ -667,7 +668,7 @@ bool Config::Reload(std::filesystem::path iniPath)
 
         // Dx11 with Dx12
         {
-            Dx11DelayedInit.set_from_config(readInt("Dx11withDx12", "UseDelayedInit"));
+            Dx11DelayedInit.set_from_config(readBool("Dx11withDx12", "UseDelayedInit"));
             DontUseNTShared.set_from_config(readBool("Dx11withDx12", "DontUseNTShared"));
         }
 
@@ -1068,6 +1069,8 @@ bool Config::SaveIni()
 
         ini.SetValue("OptiFG", "AlwaysCaptureFSRFGSwapchain",
                      GetBoolValue(Instance()->FGAlwaysCaptureFSRFGSwapchain.value_for_config()).c_str());
+        ini.SetValue("OptiFG", "UseDx11UpscalerOutputAsHudless",
+                     GetBoolValue(Instance()->FGUseDx11UpscalerOutputAsHudless.value_for_config()).c_str());
     }
 
     // FSR FG Inputs

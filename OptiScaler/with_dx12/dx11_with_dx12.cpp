@@ -841,7 +841,7 @@ Dx11WithDx12::PrepareResourcesResult Dx11WithDx12::PrepareUpscalerResources(cons
                                                                             ResourceMask mask, UINT frameIndex,
                                                                             UINT64 frameId, bool dontUseNTShared,
                                                                             bool reactiveRequired,
-                                                                            bool syncAfterPrepare)
+                                                                            bool syncAfterPrepare, bool copyOutput)
 {
     PrepareResourcesResult result = {};
 
@@ -900,8 +900,8 @@ Dx11WithDx12::PrepareResourcesResult Dx11WithDx12::PrepareUpscalerResources(cons
             cache.ParamOutput[outputIndex] = paramOutput;
 
         missing = false;
-        ok &= PrepareCachedResource("Output", parameters, NVSDK_NGX_Parameter_Output, &cache.Output[outputIndex], false,
-                                    false, true, dontUseNTShared, frameId, Dx12Device, &missing);
+        ok &= PrepareCachedResource("Output", parameters, NVSDK_NGX_Parameter_Output, &cache.Output[outputIndex],
+                                    copyOutput, false, true, dontUseNTShared, frameId, Dx12Device, &missing);
         result.MissingOutput = missing;
     }
 

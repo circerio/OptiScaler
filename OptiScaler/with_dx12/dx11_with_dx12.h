@@ -160,7 +160,8 @@ class Dx11WithDx12
 
     static PrepareResourcesResult PrepareUpscalerResources(const NVSDK_NGX_Parameter* parameters, ResourceMask mask,
                                                            UINT frameIndex, UINT64 frameId, bool dontUseNTShared,
-                                                           bool reactiveRequired, bool syncAfterPrepare);
+                                                           bool reactiveRequired, bool syncAfterPrepare,
+                                                           bool copyOutput = false);
 
     static ID3D11Device5* GetD3D11Device();
     static ID3D11DeviceContext4* GetD3D11DeviceContext();
