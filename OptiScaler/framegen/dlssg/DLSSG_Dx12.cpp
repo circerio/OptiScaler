@@ -288,6 +288,8 @@ void DLSSG_Dx12::Deactivate()
         reflexConst.useMarkersToOptimize = false;
         StreamlineProxy::ReflexSetOptions()(reflexConst);
 
+        ReflexHooks::setDlssgFrameCount(0);
+        State::Instance().dlssgDetectedInterpolationCount = 0;
         _isActive = false;
     }
 }
@@ -348,6 +350,8 @@ bool DLSSG_Dx12::Dispatch()
                  Config::Instance()->FGDLSSGInterpolationCount.value_or_default());
 
         _framesToInterpolate = Config::Instance()->FGDLSSGInterpolationCount.value_or_default();
+        ReflexHooks::setDlssgFrameCount(static_cast<uint8_t>(_framesToInterpolate));
+        State::Instance().dlssgDetectedInterpolationCount = static_cast<uint8_t>(_framesToInterpolate);
     }
 
     sl::DLSSGOptions options {};

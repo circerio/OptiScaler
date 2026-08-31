@@ -2,6 +2,7 @@
 #include "FrameLimit.h"
 
 #include "Config.h"
+#include "State.h"
 // #include "hooks/D3D11Hooks.h"
 
 inline uint64_t FrameLimit::get_timestamp()
@@ -68,7 +69,14 @@ void FrameLimit::sleep(bool fgActive)
         uint64_t min_interval_us = std::clamp((uint64_t) (1'000'000 / fpsCap), 0ULL, 100'000'000ULL);
 
         if (fgActive)
-            min_interval_us *= 2;
+        {
+            // FramerateLimit is an output-frame target.  The fallback limiter runs once per
+            // rendered game frame, so account for the number of interpolated frames instead
+            // of assuming every frame-generation backend is always 2x.
+            const auto fg = State::Instance().currentFG;
+            const uint64_t outputMultiplier = fg != nullptr ? fg->GetInterpolatedFrameCount() + 1ULL : 2ULL;
+            min_interval_us *= outputMultiplier;
+        }
 
         static uint64_t previous_frame_time = 0;
         uint64_t current_time = get_timestamp();
