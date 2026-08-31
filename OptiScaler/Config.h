@@ -642,6 +642,8 @@ class Config
 
     // Framerate
     CustomOptional<float> FramerateLimit { 0.0f };
+    CustomOptional<bool> AutoFramerateLimit { false };
+    CustomOptional<float> AutoFramerateLimitMarginMs { 0.3f };
 
     // HDR
     CustomOptional<bool> ForceHDR { false };

@@ -236,7 +236,7 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 
     auto fg = State::Instance().currentFG;
     if (willPresent && fg != nullptr)
-        ReflexHooks::update(fg->IsActive(), false);
+        ReflexHooks::update(FrameLimit::is_fg_active(), false);
     else
         ReflexHooks::update(false, false);
 

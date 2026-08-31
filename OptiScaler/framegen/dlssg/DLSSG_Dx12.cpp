@@ -350,9 +350,12 @@ bool DLSSG_Dx12::Dispatch()
                  Config::Instance()->FGDLSSGInterpolationCount.value_or_default());
 
         _framesToInterpolate = Config::Instance()->FGDLSSGInterpolationCount.value_or_default();
-        ReflexHooks::setDlssgFrameCount(static_cast<uint8_t>(_framesToInterpolate));
-        State::Instance().dlssgDetectedInterpolationCount = static_cast<uint8_t>(_framesToInterpolate);
     }
+
+    // Restore these every active dispatch. Deactivate clears them, and re-enabling with the
+    // same multiplier must not leave Reflex or the automatic native-frame limiter at zero.
+    ReflexHooks::setDlssgFrameCount(static_cast<uint8_t>(_framesToInterpolate));
+    State::Instance().dlssgDetectedInterpolationCount = static_cast<uint8_t>(_framesToInterpolate);
 
     sl::DLSSGOptions options {};
     options.mode = sl::DLSSGMode::eOn;

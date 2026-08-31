@@ -255,6 +255,8 @@ bool Config::Reload(std::filesystem::path iniPath)
         // Framerate
         {
             FramerateLimit.set_from_config(readFloat("Framerate", "FramerateLimit"));
+            AutoFramerateLimit.set_from_config(readBool("Framerate", "AutoFramerateLimit"));
+            AutoFramerateLimitMarginMs.set_from_config(readFloat("Framerate", "AutoFramerateLimitMarginMs"));
         }
 
         // FSR Common
@@ -1088,6 +1090,10 @@ bool Config::SaveIni()
     {
         ini.SetValue("Framerate", "FramerateLimit",
                      GetFloatValue(Instance()->FramerateLimit.value_for_config()).c_str());
+        ini.SetValue("Framerate", "AutoFramerateLimit",
+                     GetBoolValue(Instance()->AutoFramerateLimit.value_for_config()).c_str());
+        ini.SetValue("Framerate", "AutoFramerateLimitMarginMs",
+                     GetFloatValue(Instance()->AutoFramerateLimitMarginMs.value_for_config()).c_str());
     }
 
     // Output Scaling

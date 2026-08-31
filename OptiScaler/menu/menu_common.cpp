@@ -32,6 +32,7 @@
 #include <memory>
 #include <type_traits>
 #include <misc/IdentifyGpu.h>
+#include <misc/FrameLimit.h>
 #include <hooks/Xell_Hooks.h>
 #include <low_latency/input/input_common.h>
 
@@ -4929,6 +4930,22 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
             currentMethod.append(" (inactive)");
 
         ImGui::Text("Current method: %s", currentMethod.c_str());
+
+        bool automaticLimit = config->AutoFramerateLimit.value_or_default();
+        if (ImGui::Checkbox("Automatic FG frame limit", &automaticLimit))
+            config->AutoFramerateLimit = automaticLimit;
+        ShowHelpMarker("When FG is active and no manual FPS limit is set, detects the active refresh rate, "
+                       "keeps output below the VRR ceiling, and divides the target by the live FG multiplier.\n"
+                       "The automatic limit is removed immediately when FG stops.");
+
+        const bool fgLimitActive = FrameLimit::is_fg_active();
+        const auto outputLimit = FrameLimit::get_output_fps_limit(fgLimitActive);
+        const auto nativeLimit = FrameLimit::get_native_fps_limit(fgLimitActive);
+        const auto multiplier = FrameLimit::get_fg_multiplier(fgLimitActive);
+        if (outputLimit > 0.0f)
+            ImGui::Text("Effective limit: %.1f output / %.1f native (%ux)", outputLimit, nativeLimit, multiplier);
+        else
+            ImGui::Text("Effective limit: disabled");
 
         if (fakenvapiMode == LowLatencyMode::AntiLag2)
             ShowHelpMarker("FSR Anti-Lag 2.0 is the new name for AntiLag 2\nDon't ask me why");

@@ -3,7 +3,17 @@
 
 #include "Config.h"
 #include "State.h"
+#include "Util.h"
 // #include "hooks/D3D11Hooks.h"
+
+namespace
+{
+std::mutex refreshRateMutex;
+HWND refreshRateHwnd = nullptr;
+HMONITOR refreshRateMonitor = nullptr;
+int cachedRefreshRate = 0;
+uint64_t refreshRateQueryTime = 0;
+} // namespace
 
 inline uint64_t FrameLimit::get_timestamp()
 {
@@ -64,28 +74,123 @@ inline int FrameLimit::combined_sleep(int64_t ns)
 
 void FrameLimit::sleep(bool fgActive)
 {
-    if (auto fpsCap = Config::Instance()->FramerateLimit.value_or_default(); fpsCap != 0.0f)
+    static uint64_t previousFrameTime = 0;
+    static float previousFpsCap = 0.0f;
+
+    const auto fpsCap = get_native_fps_limit(fgActive);
+    if (fpsCap <= 0.0f || !std::isfinite(fpsCap))
     {
-        uint64_t min_interval_us = std::clamp((uint64_t) (1'000'000 / fpsCap), 0ULL, 100'000'000ULL);
-
-        if (fgActive)
-        {
-            // FramerateLimit is an output-frame target.  The fallback limiter runs once per
-            // rendered game frame, so account for the number of interpolated frames instead
-            // of assuming every frame-generation backend is always 2x.
-            const auto fg = State::Instance().currentFG;
-            const uint64_t outputMultiplier = fg != nullptr ? fg->GetInterpolatedFrameCount() + 1ULL : 2ULL;
-            min_interval_us *= outputMultiplier;
-        }
-
-        static uint64_t previous_frame_time = 0;
-        uint64_t current_time = get_timestamp();
-        uint64_t frame_time = current_time - previous_frame_time;
-        if (frame_time < 1000 * min_interval_us)
-        {
-            if (auto res = combined_sleep(min_interval_us * 1000 - frame_time); res)
-                LOG_ERROR("Sleep command failed: {}", res);
-        }
-        previous_frame_time = get_timestamp();
+        previousFrameTime = 0;
+        previousFpsCap = 0.0f;
+        return;
     }
+
+    if (fpsCap != previousFpsCap)
+    {
+        previousFrameTime = 0;
+        previousFpsCap = fpsCap;
+    }
+
+    const auto minIntervalNs = std::clamp(static_cast<uint64_t>(std::llround(1'000'000'000.0 / fpsCap)), 1ULL,
+                                          100'000'000'000ULL);
+    const auto currentTime = get_timestamp();
+    const auto frameTime = previousFrameTime == 0 ? minIntervalNs : currentTime - previousFrameTime;
+
+    if (frameTime < minIntervalNs)
+    {
+        if (auto res = combined_sleep(minIntervalNs - frameTime); res)
+            LOG_ERROR("Sleep command failed: {}", res);
+    }
+
+    previousFrameTime = get_timestamp();
+}
+
+bool FrameLimit::is_fg_active()
+{
+    const auto& state = State::Instance();
+    const auto fg = state.currentFG;
+
+    if (!Config::Instance()->FGEnabled.value_or_default() || state.activeFgOutput == FGOutput::NoFG || fg == nullptr ||
+        !fg->IsActive() || fg->IsPaused())
+    {
+        return false;
+    }
+
+    // DLSSG explicitly clears this value when interpolation stops.  Checking it avoids
+    // retaining the automatic native-frame cap while the wrapper waits for new frame data.
+    if (state.activeFgOutput == FGOutput::DLSSG)
+        return state.dlssgDetectedInterpolationCount > 0;
+
+    return true;
+}
+
+uint32_t FrameLimit::get_fg_multiplier(bool fgActive)
+{
+    if (!fgActive)
+        return 1;
+
+    const auto& state = State::Instance();
+    if (state.activeFgOutput == FGOutput::DLSSG && state.dlssgDetectedInterpolationCount > 0)
+        return static_cast<uint32_t>(state.dlssgDetectedInterpolationCount + 1);
+
+    if (state.currentFG != nullptr)
+        return std::max(2U, state.currentFG->GetInterpolatedFrameCount() + 1U);
+
+    return 2;
+}
+
+int FrameLimit::get_refresh_rate()
+{
+    const auto fg = State::Instance().currentFG;
+    const auto hwnd = fg != nullptr ? fg->Hwnd() : GetForegroundWindow();
+    if (hwnd == nullptr)
+        return 0;
+
+    const auto monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+    const auto now = get_timestamp();
+
+    std::lock_guard<std::mutex> lock(refreshRateMutex);
+    constexpr uint64_t refreshIntervalNs = 2'000'000'000ULL;
+    if (hwnd != refreshRateHwnd || monitor != refreshRateMonitor || now - refreshRateQueryTime >= refreshIntervalNs)
+    {
+        refreshRateHwnd = hwnd;
+        refreshRateMonitor = monitor;
+        refreshRateQueryTime = now;
+
+        const auto detectedRefreshRate = Util::GetActiveRefreshRate(hwnd);
+        if (detectedRefreshRate != cachedRefreshRate)
+        {
+            LOG_INFO("Detected active refresh rate: {} Hz", detectedRefreshRate);
+            cachedRefreshRate = detectedRefreshRate;
+        }
+    }
+
+    return cachedRefreshRate;
+}
+
+float FrameLimit::get_output_fps_limit(bool fgActive)
+{
+    const auto manualLimit = Config::Instance()->FramerateLimit.value_or_default();
+    if (manualLimit > 0.0f && std::isfinite(manualLimit))
+        return manualLimit;
+
+    if (!fgActive || !Config::Instance()->AutoFramerateLimit.value_or_default())
+        return 0.0f;
+
+    const auto refreshRate = get_refresh_rate();
+    if (refreshRate <= 1)
+        return 0.0f;
+
+    const auto marginMs = std::clamp(Config::Instance()->AutoFramerateLimitMarginMs.value_or_default(), 0.0f, 10.0f);
+    const auto outputLimit = 1000.0f / (1000.0f / static_cast<float>(refreshRate) + marginMs);
+    return std::round(outputLimit * 10.0f) / 10.0f;
+}
+
+float FrameLimit::get_native_fps_limit(bool fgActive)
+{
+    const auto outputLimit = get_output_fps_limit(fgActive);
+    if (outputLimit <= 0.0f)
+        return 0.0f;
+
+    return outputLimit / static_cast<float>(get_fg_multiplier(fgActive));
 }

@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "Reflex_Hooks.h"
 #include <Config.h>
+#include <misc/FrameLimit.h>
 
 #include <nvapi/fakenvapi.h>
 
@@ -637,7 +638,7 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
     if (!State::Instance().reflexLimitsFps)
         return;
 
-    float currentFps = Config::Instance()->FramerateLimit.value_or_default();
+    const float currentFps = FrameLimit::get_native_fps_limit(fgActive);
     static uint8_t lastFgNumFramesToGenerate = 0;
 
     if (lastFgNumFramesToGenerate != _FgNumFramesToGenerate)
@@ -666,18 +667,6 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
             LOG_DEBUG("DLSS FG no longer detected");
         else
             LOG_DEBUG("DLSS FG detected, mode: {}x", _FgNumFramesToGenerate + 1);
-    }
-
-    // TODO: replace fgActive with _FgNumFramesToGenerate
-    // _FgNumFramesToGenerate needs to be correctly updated
-    if (fgActive && State::Instance().activeFgOutput == FGOutput::FSRFG)
-    {
-        currentFps /= 2;
-    }
-    else if (_FgNumFramesToGenerate > 0 && fakenvapi::isUsingAsMainNvapi() &&
-             fakenvapi::getCurrentMode() != LowLatencyMode::XeLL)
-    {
-        currentFps /= (_FgNumFramesToGenerate + 1);
     }
 
     if (currentFps != lastFps)
