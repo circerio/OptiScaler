@@ -210,6 +210,8 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             FGAlwaysCaptureFSRFGSwapchain.set_from_config(readBool("OptiFG", "AlwaysCaptureFSRFGSwapchain"));
             FGUseDx11UpscalerOutputAsHudless.set_from_config(readBool("OptiFG", "UseDx11UpscalerOutputAsHudless"));
+            FGDx11ResourcesValidUntilPresent.set_from_config(
+                readBool("OptiFG", "Dx11ResourcesValidUntilPresent"));
         }
 
         {
@@ -1076,6 +1078,8 @@ bool Config::SaveIni()
                      GetBoolValue(Instance()->FGAlwaysCaptureFSRFGSwapchain.value_for_config()).c_str());
         ini.SetValue("OptiFG", "UseDx11UpscalerOutputAsHudless",
                      GetBoolValue(Instance()->FGUseDx11UpscalerOutputAsHudless.value_for_config()).c_str());
+        ini.SetValue("OptiFG", "Dx11ResourcesValidUntilPresent",
+                     GetBoolValue(Instance()->FGDx11ResourcesValidUntilPresent.value_for_config()).c_str());
     }
 
     // FSR FG Inputs

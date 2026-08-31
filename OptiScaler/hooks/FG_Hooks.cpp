@@ -30,6 +30,66 @@ static IUnknown* oldSwapChain = nullptr;
 static ID3D12CommandQueue* currentCommandQueue = nullptr;
 static bool _forcedHdrForXeFG = false;
 static HANDLE _semaphore = nullptr;
+static std::optional<uint32_t> _syntheticReflexStartedFrame = std::nullopt;
+
+static bool GetSyntheticReflexFrameToken(uint32_t frameId, sl::FrameToken*& token)
+{
+    token = nullptr;
+
+    if (StreamlineProxy::GetNewFrameToken() == nullptr)
+        return false;
+
+    const auto result = StreamlineProxy::GetNewFrameToken()(token, &frameId);
+    if (result != sl::Result::eOk || token == nullptr)
+    {
+        LOG_WARN("Synthetic Reflex failed to get frame token {}: {}", frameId, (int32_t) result);
+        return false;
+    }
+
+    return true;
+}
+
+static bool SetSyntheticReflexMarker(sl::PCLMarker marker, sl::FrameToken* token)
+{
+    if (token == nullptr || StreamlineProxy::PCLSetMarker() == nullptr)
+        return false;
+
+    const auto result = StreamlineProxy::PCLSetMarker()(marker, *token);
+    if (result != sl::Result::eOk)
+    {
+        LOG_WARN("Synthetic Reflex marker {} failed for frame {}: {}", (uint32_t) marker, (uint32_t) *token,
+                 (int32_t) result);
+        return false;
+    }
+
+    return true;
+}
+
+static bool StartSyntheticReflexFrame(uint32_t frameId)
+{
+    if (_syntheticReflexStartedFrame.has_value() && _syntheticReflexStartedFrame.value() == frameId)
+        return true;
+
+    if (StreamlineProxy::ReflexSleep() == nullptr)
+        return false;
+
+    sl::FrameToken* token = nullptr;
+    if (!GetSyntheticReflexFrameToken(frameId, token))
+        return false;
+
+    const auto sleepResult = StreamlineProxy::ReflexSleep()(*token);
+    if (sleepResult != sl::Result::eOk)
+    {
+        LOG_WARN("Synthetic Reflex sleep failed for frame {}: {}", frameId, (int32_t) sleepResult);
+        return false;
+    }
+
+    if (!SetSyntheticReflexMarker(sl::PCLMarker::eSimulationStart, token))
+        return false;
+
+    _syntheticReflexStartedFrame = frameId;
+    return true;
+}
 
 #if (XEFG_RESOURCE_REF_LIMIT == 0)
 inline static std::vector<void*> oldBackBuffers;
@@ -1196,19 +1256,23 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     if (willPresent && fg != nullptr && !fgFeatureActive)
         state.dlssgDetectedInterpolationCount = 0;
 
-    if (willPresent && fgFeatureActive && state.activeFgOutput == FGOutput::DLSSG)
-    {
-        if ((!ReflexHooks::gameIsSendingMarkers() || !config->FGDLSSGUseGamesReflexMarkers.value_or_default()))
-        {
-            if (StreamlineProxy::PCLSetMarker() != nullptr)
-            {
-                ((IDXGISwapChain4*) This)->GetCurrentBackBufferIndex();
-                const uint32_t frameId = (uint32_t) fg->FrameCount();
-                tokenResult = StreamlineProxy::GetNewFrameToken()(localToken, &frameId);
+    const bool useSyntheticReflex =
+        willPresent && fgFeatureActive && state.activeFgOutput == FGOutput::DLSSG &&
+        (!config->FGDLSSGUseGamesReflexMarkers.value_or_default() || !ReflexHooks::gameIsSendingMarkers());
+    uint32_t syntheticReflexFrameId = 0;
 
-                if (tokenResult == sl::Result::eOk)
-                    StreamlineProxy::PCLSetMarker()(sl::PCLMarker::ePresentStart, *localToken);
-            }
+    if (!useSyntheticReflex)
+        _syntheticReflexStartedFrame.reset();
+    else
+    {
+        syntheticReflexFrameId = (uint32_t) fg->FrameCount();
+
+        if (StartSyntheticReflexFrame(syntheticReflexFrameId) &&
+            GetSyntheticReflexFrameToken(syntheticReflexFrameId, localToken))
+        {
+            tokenResult = sl::Result::eOk;
+            SetSyntheticReflexMarker(sl::PCLMarker::eSimulationEnd, localToken);
+            SetSyntheticReflexMarker(sl::PCLMarker::eRenderSubmitStart, localToken);
         }
     }
 
@@ -1224,6 +1288,12 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     else if (willPresent && fg != nullptr)
     {
         LOG_TRACE("FGHooks::FGPresent: FG feature exists but is inactive/paused; pass-through present only");
+    }
+
+    if (useSyntheticReflex && tokenResult == sl::Result::eOk && localToken != nullptr)
+    {
+        SetSyntheticReflexMarker(sl::PCLMarker::eRenderSubmitEnd, localToken);
+        SetSyntheticReflexMarker(sl::PCLMarker::ePresentStart, localToken);
     }
 
     if (willPresent && state.swapchainInteropApi == SwapchainInteropApi::None)
@@ -1282,15 +1352,14 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
             Util::GetDeviceRemovedReason(state.currentD3D12Device);
     }
 
-    if (tokenResult == sl::Result::eOk && localToken != nullptr && fgFeatureActive &&
-        (!ReflexHooks::gameIsSendingMarkers() || !config->FGDLSSGUseGamesReflexMarkers.value_or_default()) &&
-        willPresent && state.activeFgOutput == FGOutput::DLSSG)
+    if (useSyntheticReflex && tokenResult == sl::Result::eOk && localToken != nullptr)
     {
-        if (StreamlineProxy::PCLSetMarker() != nullptr)
-            StreamlineProxy::PCLSetMarker()(sl::PCLMarker::ePresentEnd, *localToken);
+        SetSyntheticReflexMarker(sl::PCLMarker::ePresentEnd, localToken);
 
-        LOG_DEBUG("Calling ReflexSleep");
-        StreamlineProxy::ReflexSleep()(*localToken);
+        // Present has finished, so this is the closest injection point to the beginning of the game's next frame.
+        // Sleeping before SimulationStart follows the official Streamline Reflex ordering without imposing an FPS cap.
+        if (SUCCEEDED(result))
+            StartSyntheticReflexFrame(syntheticReflexFrameId + 1);
     }
 
     if (state.swapchainInteropApi == SwapchainInteropApi::None)

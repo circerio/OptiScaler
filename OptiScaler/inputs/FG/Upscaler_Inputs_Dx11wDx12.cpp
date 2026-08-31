@@ -10,6 +10,7 @@ using namespace OptiMath;
 static DS_Dx12* DepthScaleDx11wDx12 = nullptr;
 static bool Dx11HudlessCaptureLogged = false;
 static bool Dx11HudlessFallbackLogged = false;
+static std::optional<bool> Dx11ResourceLifetimeLogged = std::nullopt;
 
 static Dx11WithDx12::ResourceMask GetRequiredFgResourceMask()
 {
@@ -19,6 +20,21 @@ static Dx11WithDx12::ResourceMask GetRequiredFgResourceMask()
 static bool ShouldCaptureUpscalerOutputAsHudless()
 {
     return Config::Instance()->FGUseDx11UpscalerOutputAsHudless.value_or_default();
+}
+
+static FG_ResourceValidity GetDx11BridgeResourceValidity()
+{
+    const bool validUntilPresent = Config::Instance()->FGDx11ResourcesValidUntilPresent.value_or_default();
+
+    if (!Dx11ResourceLifetimeLogged.has_value() || Dx11ResourceLifetimeLogged.value() != validUntilPresent)
+    {
+        LOG_INFO("Dx11wDx12 FG resource lifetime: {}",
+                 validUntilPresent ? "valid until Present (direct backend consumption)"
+                                   : "valid now (backend may clone resources)");
+        Dx11ResourceLifetimeLogged = validUntilPresent;
+    }
+
+    return validUntilPresent ? FG_ResourceValidity::UntilPresent : FG_ResourceValidity::ValidNow;
 }
 
 static bool PrepareFgResourceCache(NVSDK_NGX_Parameter* parameters, UINT64 frameKey)
@@ -282,7 +298,7 @@ void UpscalerInputsDx11wDx12::UpscaleStart(NVSDK_NGX_Parameter* InParameters, IF
                                         ? (D3D12_RESOURCE_STATES) Config::Instance()->OutputResourceBarrier.value_or(
                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
                                         : D3D12_RESOURCE_STATE_COMMON;
-                setResource.validity = FG_ResourceValidity::ValidNow;
+                setResource.validity = GetDx11BridgeResourceValidity();
 
                 if (fg->SetResource(&setResource) && !Dx11HudlessCaptureLogged)
                 {
@@ -310,7 +326,7 @@ void UpscalerInputsDx11wDx12::UpscaleStart(NVSDK_NGX_Parameter* InParameters, IF
         setResource.resource = paramVelocity;
         setResource.state = (D3D12_RESOURCE_STATES) Config::Instance()->MVResourceBarrier.value_or(
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-        setResource.validity = FG_ResourceValidity::ValidNow;
+        setResource.validity = GetDx11BridgeResourceValidity();
 
         if (feature->LowResMV())
         {
@@ -369,7 +385,7 @@ void UpscalerInputsDx11wDx12::UpscaleStart(NVSDK_NGX_Parameter* InParameters, IF
             setResource.height = feature->RenderHeight();
             setResource.state = (D3D12_RESOURCE_STATES) Config::Instance()->DepthResourceBarrier.value_or(
                 D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            setResource.validity = FG_ResourceValidity::ValidNow;
+            setResource.validity = GetDx11BridgeResourceValidity();
 
             fg->SetResource(&setResource);
         }

@@ -539,6 +539,7 @@ class Config
     CustomOptional<bool> FGResourceFlipOffset { false };
     CustomOptional<bool> FGAlwaysCaptureFSRFGSwapchain { false };
     CustomOptional<bool> FGUseDx11UpscalerOutputAsHudless { false };
+    CustomOptional<bool> FGDx11ResourcesValidUntilPresent { false };
 
     CustomOptional<int, NoDefault> FGRectLeft;
     CustomOptional<int, NoDefault> FGRectTop;

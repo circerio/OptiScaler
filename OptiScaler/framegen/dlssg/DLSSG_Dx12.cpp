@@ -290,6 +290,7 @@ void DLSSG_Dx12::Deactivate()
 
         ReflexHooks::setDlssgFrameCount(0);
         State::Instance().dlssgDetectedInterpolationCount = 0;
+        _lastUseGameReflexMarkers.reset();
         _isActive = false;
     }
 }
@@ -394,13 +395,24 @@ bool DLSSG_Dx12::Dispatch()
 
     sl::ReflexOptions reflexConst = {};
     reflexConst.mode = sl::ReflexMode::eLowLatency;
-    reflexConst.useMarkersToOptimize = ReflexHooks::gameIsSendingMarkers();
+    const bool useGameReflexMarkers = Config::Instance()->FGDLSSGUseGamesReflexMarkers.value_or_default() &&
+                                      ReflexHooks::gameIsSendingMarkers();
+    reflexConst.useMarkersToOptimize = useGameReflexMarkers;
 
-    auto reflexSetOptionsResult = StreamlineProxy::ReflexSetOptions()(reflexConst);
-
-    if (reflexSetOptionsResult != sl::Result::eOk)
+    if (!_lastUseGameReflexMarkers.has_value() || _lastUseGameReflexMarkers.value() != useGameReflexMarkers)
     {
-        LOG_ERROR("Couldn't set Reflex options, error: {}", magic_enum::enum_name(reflexSetOptionsResult));
+        LOG_INFO("DLSSG Reflex: Low Latency enabled, marker source: {}",
+                 useGameReflexMarkers ? "game" : "OptiScaler synthetic frame markers");
+
+        auto reflexSetOptionsResult = StreamlineProxy::ReflexSetOptions()(reflexConst);
+        if (reflexSetOptionsResult != sl::Result::eOk)
+        {
+            LOG_ERROR("Couldn't set Reflex options, error: {}", magic_enum::enum_name(reflexSetOptionsResult));
+        }
+        else
+        {
+            _lastUseGameReflexMarkers = useGameReflexMarkers;
+        }
     }
 
     if (!_haveHudless.has_value())
