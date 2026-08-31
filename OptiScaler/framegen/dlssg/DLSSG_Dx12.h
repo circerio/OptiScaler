@@ -10,6 +10,8 @@ class DLSSG_Dx12 : public virtual IFGFeature_Dx12
     uint32_t _width = 0;
     uint32_t _height = 0;
     std::optional<bool> _haveHudless = std::nullopt;
+    std::optional<bool> _lastUIRecomposition = std::nullopt;
+    bool _warnedUIRecompositionWithoutUI = false;
 
     sl::ViewportHandle viewport { 0 };
     sl::FrameToken* frameToken = nullptr;
