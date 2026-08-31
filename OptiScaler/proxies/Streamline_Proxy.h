@@ -273,6 +273,51 @@ class StreamlineProxy
         return pcl;
     }
 
+    template <typename T>
+    static bool BindSelectedFeatureFunction(sl::Feature feature, const char* functionName, T& target)
+    {
+        void* function = nullptr;
+        const auto result = _slGetFeatureFunction(feature, functionName, function);
+
+        if (result != sl::Result::eOk || function == nullptr)
+        {
+            LOG_ERROR("Failed to bind selected Streamline function {} (result: {})", functionName,
+                      static_cast<int32_t>(result));
+            target = nullptr;
+            return false;
+        }
+
+        target = reinterpret_cast<T>(function);
+        return true;
+    }
+
+    static bool BindSelectedFeatureFunctions()
+    {
+        if (_slGetFeatureFunction == nullptr)
+        {
+            LOG_ERROR("slGetFeatureFunction is not available");
+            return false;
+        }
+
+        bool result = true;
+        result &= BindSelectedFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGSetOptions", _slDLSSGSetOptions);
+        result &= BindSelectedFeatureFunction(sl::kFeatureDLSS_G, "slDLSSGGetState", _slDLSSGGetState);
+        result &= BindSelectedFeatureFunction(sl::kFeatureReflex, "slReflexGetState", _slReflexGetState);
+        result &= BindSelectedFeatureFunction(sl::kFeatureReflex, "slReflexSleep", _slReflexSleep);
+        result &= BindSelectedFeatureFunction(sl::kFeatureReflex, "slReflexSetOptions", _slReflexSetOptions);
+        result &= BindSelectedFeatureFunction(sl::kFeaturePCL, "slPCLGetState", _slPCLGetState);
+        result &= BindSelectedFeatureFunction(sl::kFeaturePCL, "slPCLSetMarker", _slPCLSetMarker);
+        result &= BindSelectedFeatureFunction(sl::kFeaturePCL, "slPCLSetOptions", _slPCLSetOptions);
+
+        // Camera prediction is optional and is not used by the frame-generation path.
+        BindSelectedFeatureFunction(sl::kFeatureReflex, "slReflexSetCameraData", _slReflexSetCameraData);
+        BindSelectedFeatureFunction(sl::kFeatureReflex, "slReflexGetPredictedCameraData",
+                                    _slReflexGetPredictedCameraData);
+
+        LOG_INFO("Bound functions from Streamline-selected plugins: {}", result);
+        return result;
+    }
+
     static feature_version Version()
     {
         if (_slVersion.major == 0)
@@ -376,7 +421,7 @@ class StreamlineProxy
             else
             {
                 auto result = _slSetD3DDevice(device);
-                if (result == sl::Result::eOk)
+                if (result == sl::Result::eOk && BindSelectedFeatureFunctions())
                 {
                     auto reflexConst = sl::ReflexOptions {};
                     reflexConst.mode = sl::ReflexMode::eOff;
