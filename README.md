@@ -11,6 +11,9 @@
 </div>
 <br />
 
+> [!IMPORTANT]
+> This fork branch contains an experimental **DirectX 11 engine-aware DLSS Frame Generation proof of concept** for *Trails in the Sky 1st Chapter*. It is source-only, game-specific research and is not an official OptiScaler release. See [the English technical report](TRAILS1ST_DX11_DLSSG_POC.md) or the [Traditional Chinese report](TRAILS1ST_DX11_DLSSG_POC.zh-TW.md).
+
 ## Table of Contents
 
 **1.** [**About**](#about)  
