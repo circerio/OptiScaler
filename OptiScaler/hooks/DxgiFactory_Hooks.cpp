@@ -411,6 +411,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
                 if (hiddenHwnd != nullptr && dx12Device != nullptr && dx12Queue != nullptr)
                 {
                     DXGI_SWAP_CHAIN_DESC realDesc = localDesc;
+                    realDesc.BufferDesc.Format = Dx11wDx12SC::ResolveInteropFormat(realDesc.BufferDesc.Format);
                     realDesc.OutputWindow = hiddenHwnd;
                     realDesc.Windowed = TRUE;
 
@@ -422,6 +423,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
                     }
 
                     DXGI_SWAP_CHAIN_DESC fgDesc = localDesc;
+                    fgDesc.BufferDesc.Format = Dx11wDx12SC::ResolveInteropFormat(fgDesc.BufferDesc.Format);
                     HRESULT fgScResult = E_FAIL;
                     IDXGISwapChain* fgSwapChain = nullptr;
                     IDXGISwapChain4* fgSwapChain4 = nullptr;
@@ -800,6 +802,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
                 if (hiddenHwnd != nullptr && dx12Device != nullptr && dx12Queue != nullptr)
                 {
                     DXGI_SWAP_CHAIN_DESC1 realDesc = localDesc;
+                    realDesc.Format = Dx11wDx12SC::ResolveInteropFormat(realDesc.Format);
                     IDXGISwapChain1* realDx11SwapChain1 = nullptr;
                     HRESULT realScResult = E_FAIL;
                     {
@@ -809,6 +812,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
                     }
 
                     DXGI_SWAP_CHAIN_DESC1 fgDesc = localDesc;
+                    fgDesc.Format = Dx11wDx12SC::ResolveInteropFormat(fgDesc.Format);
                     HRESULT fgScResult = E_FAIL;
                     IDXGISwapChain1* fgSwapChain1 = nullptr;
                     IDXGISwapChain4* fgSwapChain4 = nullptr;

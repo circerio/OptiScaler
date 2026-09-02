@@ -15,6 +15,10 @@ class DECLSPEC_UUID("23b064bb-482d-416c-93b1-829acedfb3d0") Dx11wDx12SC final : 
     Dx11wDx12SC(IDXGISwapChain* real, IDXGISwapChain4* fgSC, ID3D11Device* pDevice, HWND hWnd, UINT flags);
     virtual ~Dx11wDx12SC();
 
+    static bool IsHdrInteropRequested();
+    static DXGI_FORMAT ResolveInteropFormat(DXGI_FORMAT requestedFormat);
+    static DXGI_COLOR_SPACE_TYPE ResolveInteropColorSpace();
+
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppvObject) override;
     ULONG STDMETHODCALLTYPE AddRef() override;
     ULONG STDMETHODCALLTYPE Release() override;
@@ -80,6 +84,7 @@ class DECLSPEC_UUID("23b064bb-482d-416c-93b1-829acedfb3d0") Dx11wDx12SC final : 
     void _ReleaseInteropBackBuffers();
     void _ReleaseInteropObjects();
     void _RefreshCachedSwapchainDesc();
+    bool _ApplyInteropColorSpace();
     UINT _GetDx11BackBufferIndexForPresent() const;
     void _AdvanceFakeBackBufferIndex();
     bool _WaitForInteropCopyOnPresentQueue();

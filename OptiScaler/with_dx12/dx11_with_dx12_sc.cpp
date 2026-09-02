@@ -82,6 +82,32 @@ DXGI_FORMAT ResolveBufferFormat(IDXGISwapChain* swapchain, IDXGISwapChain1* swap
 }
 } // namespace
 
+bool Dx11wDx12SC::IsHdrInteropRequested()
+{
+    return Config::Instance()->ForceHDR.value_or_default();
+}
+
+DXGI_FORMAT Dx11wDx12SC::ResolveInteropFormat(DXGI_FORMAT requestedFormat)
+{
+    if (!IsHdrInteropRequested())
+        return requestedFormat;
+
+    // Streamline DLSS Frame Generation supports HDR10 presentation, not scRGB. Keep the
+    // hidden D3D11 and visible D3D12 swapchains format-identical so the cross-API
+    // CopyResource remains valid.
+    const bool useHdr10 = Config::Instance()->UseHDR10.value_or_default() ||
+                          State::Instance().activeFgOutput == FGOutput::DLSSG;
+    return useHdr10 ? DXGI_FORMAT_R10G10B10A2_UNORM : DXGI_FORMAT_R16G16B16A16_FLOAT;
+}
+
+DXGI_COLOR_SPACE_TYPE Dx11wDx12SC::ResolveInteropColorSpace()
+{
+    const bool useHdr10 = Config::Instance()->UseHDR10.value_or_default() ||
+                          State::Instance().activeFgOutput == FGOutput::DLSSG;
+    return useHdr10 ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
+                    : DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
+}
+
 Dx11wDx12SC::Dx11wDx12SC(IDXGISwapChain* real, IDXGISwapChain4* fgSC, ID3D11Device* pDevice, HWND hWnd, UINT flags)
     : _real(real), _fgSwapChain(fgSC), _dx11Device(pDevice), _handle(hWnd), _refcount(1)
 {
@@ -129,6 +155,9 @@ Dx11wDx12SC::Dx11wDx12SC(IDXGISwapChain* real, IDXGISwapChain4* fgSC, ID3D11Devi
     State::Instance().swapchainInteropApi = SwapchainInteropApi::Dx11wDx12;
 
     _RefreshCachedSwapchainDesc();
+
+    if (!_ApplyInteropColorSpace() && IsHdrInteropRequested())
+        LOG_WARN("Dx11wDx12SC failed to apply HDR color space during creation");
 
     LOG_INFO("Dx11wDx12SC {} created, real: {:X}, fg: {:X}, dx11: {:X}, dx12: {:X}, queue: {:X}", _id, (UINT64) _real,
              (UINT64) _fgSwapChain, (UINT64) _dx11Device, (UINT64) _dx12Device, (UINT64) _dx12CommandQueue);
@@ -399,8 +428,9 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc)
 HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat,
                                                      UINT SwapChainFlags)
 {
+    const auto interopFormat = ResolveInteropFormat(NewFormat);
     LOG_DEBUG("Dx11wDx12SC ResizeBuffers: count {}, size {}x{}, format {}, flags {:X}", BufferCount, Width, Height,
-              (UINT) NewFormat, SwapChainFlags);
+              (UINT) interopFormat, SwapChainFlags);
 
     if (!_WaitForCopyQueueIdle())
         LOG_WARN("continuing ResizeBuffers after copy fence wait failure");
@@ -408,18 +438,19 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers(UINT BufferCount, UINT Widt
     MenuOverlayDx::CleanupRenderTarget(true, _handle);
     _ReleaseInteropBackBuffers();
 
-    HRESULT realResult = _real != nullptr ? _real->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags)
+    HRESULT realResult = _real != nullptr ? _real->ResizeBuffers(BufferCount, Width, Height, interopFormat, SwapChainFlags)
                                           : DXGI_ERROR_DEVICE_REMOVED;
 
     HRESULT fgResult = DXGI_ERROR_DEVICE_REMOVED;
     if (SUCCEEDED(realResult) && _fgSwapChain != nullptr)
-        fgResult = _fgSwapChain->ResizeBuffers(BufferCount, Width, Height, NewFormat, SwapChainFlags);
+        fgResult = _fgSwapChain->ResizeBuffers(BufferCount, Width, Height, interopFormat, SwapChainFlags);
 
     LOG_DEBUG("Dx11wDx12SC ResizeBuffers results: real {:X}, fg {:X}", (UINT) realResult, (UINT) fgResult);
 
     if (SUCCEEDED(realResult) && SUCCEEDED(fgResult))
     {
         _RefreshCachedSwapchainDesc();
+        _ApplyInteropColorSpace();
 
         if (Config::Instance()->FGEnabled.value_or_default())
         {
@@ -598,6 +629,9 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::CheckColorSpaceSupport(DXGI_COLOR_SPACE_T
 
 HRESULT STDMETHODCALLTYPE Dx11wDx12SC::SetColorSpace1(DXGI_COLOR_SPACE_TYPE ColorSpace)
 {
+    if (IsHdrInteropRequested())
+        ColorSpace = ResolveInteropColorSpace();
+
     State::Instance().isHdrActive = ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 ||
                                     ColorSpace == DXGI_COLOR_SPACE_YCBCR_FULL_GHLG_TOPLEFT_P2020 ||
                                     ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020 ||
@@ -613,8 +647,9 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers1(UINT BufferCount, UINT Wid
                                                       UINT SwapChainFlags, const UINT* pCreationNodeMask,
                                                       IUnknown* const* ppPresentQueue)
 {
+    const auto interopFormat = ResolveInteropFormat(Format);
     LOG_DEBUG("Dx11wDx12SC ResizeBuffers1: count {}, size {}x{}, format {}, flags {:X}", BufferCount, Width, Height,
-              (UINT) Format, SwapChainFlags);
+              (UINT) interopFormat, SwapChainFlags);
 
     if (!_WaitForCopyQueueIdle())
         LOG_WARN("continuing ResizeBuffers1 after copy fence wait failure");
@@ -622,15 +657,15 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers1(UINT BufferCount, UINT Wid
     MenuOverlayDx::CleanupRenderTarget(true, _handle);
     _ReleaseInteropBackBuffers();
 
-    HRESULT realResult = _real3 != nullptr ? _real3->ResizeBuffers1(BufferCount, Width, Height, Format, SwapChainFlags,
+    HRESULT realResult = _real3 != nullptr ? _real3->ResizeBuffers1(BufferCount, Width, Height, interopFormat, SwapChainFlags,
                                                                     pCreationNodeMask, ppPresentQueue)
-                                           : ResizeBuffers(BufferCount, Width, Height, Format, SwapChainFlags);
+                                           : ResizeBuffers(BufferCount, Width, Height, interopFormat, SwapChainFlags);
 
     HRESULT fgResult = DXGI_ERROR_DEVICE_REMOVED;
     if (SUCCEEDED(realResult) && _fgSwapChain != nullptr)
     {
         // The game's ppPresentQueue is not valid for the DX12 FG swapchain. Use ResizeBuffers for phase 1.
-        fgResult = _fgSwapChain->ResizeBuffers(BufferCount, Width, Height, Format, SwapChainFlags);
+        fgResult = _fgSwapChain->ResizeBuffers(BufferCount, Width, Height, interopFormat, SwapChainFlags);
     }
 
     LOG_DEBUG("Dx11wDx12SC ResizeBuffers1 results: real {:X}, fg {:X}", (UINT) realResult, (UINT) fgResult);
@@ -638,6 +673,7 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers1(UINT BufferCount, UINT Wid
     if (SUCCEEDED(realResult) && SUCCEEDED(fgResult))
     {
         _RefreshCachedSwapchainDesc();
+        _ApplyInteropColorSpace();
 
         if (Config::Instance()->FGEnabled.value_or_default())
         {
@@ -659,6 +695,42 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::SetHDRMetaData(DXGI_HDR_METADATA_TYPE Typ
         return _fgSwapChain->SetHDRMetaData(Type, Size, pMetaData);
 
     return _real4 != nullptr ? _real4->SetHDRMetaData(Type, Size, pMetaData) : DXGI_ERROR_DEVICE_REMOVED;
+}
+
+bool Dx11wDx12SC::_ApplyInteropColorSpace()
+{
+    if (!IsHdrInteropRequested())
+        return true;
+
+    if (_fgSwapChain == nullptr)
+        return false;
+
+    const auto colorSpace = ResolveInteropColorSpace();
+    UINT support = 0;
+    auto result = _fgSwapChain->CheckColorSpaceSupport(colorSpace, &support);
+    if (FAILED(result))
+    {
+        LOG_ERROR("Dx11wDx12SC CheckColorSpaceSupport({}) failed: {:X}", (UINT) colorSpace, (UINT) result);
+        return false;
+    }
+
+    if ((support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) == 0)
+    {
+        LOG_ERROR("Dx11wDx12SC color space {} is not supported for presentation", (UINT) colorSpace);
+        return false;
+    }
+
+    result = _fgSwapChain->SetColorSpace1(colorSpace);
+    if (FAILED(result))
+    {
+        LOG_ERROR("Dx11wDx12SC SetColorSpace1({}) failed: {:X}", (UINT) colorSpace, (UINT) result);
+        return false;
+    }
+
+    State::Instance().isHdrActive = true;
+    LOG_INFO("Dx11wDx12SC HDR presentation active: format {}, color space {}", (UINT) _bufferFormat,
+             (UINT) colorSpace);
+    return true;
 }
 
 bool Dx11wDx12SC::_InitInteropObjects()

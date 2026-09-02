@@ -10,6 +10,7 @@ using namespace OptiMath;
 static DS_Dx12* DepthScaleDx11wDx12 = nullptr;
 static bool Dx11HudlessCaptureLogged = false;
 static bool Dx11HudlessFallbackLogged = false;
+static bool Dx11HudlessPolicyLogged = false;
 static std::optional<bool> Dx11ResourceLifetimeLogged = std::nullopt;
 
 static Dx11WithDx12::ResourceMask GetRequiredFgResourceMask()
@@ -19,7 +20,37 @@ static Dx11WithDx12::ResourceMask GetRequiredFgResourceMask()
 
 static bool ShouldCaptureUpscalerOutputAsHudless()
 {
-    return Config::Instance()->FGUseDx11UpscalerOutputAsHudless.value_or_default();
+    const auto config = Config::Instance();
+    const bool requested = config->FGUseDx11UpscalerOutputAsHudless.value_or_default();
+    const bool disabled = config->FGDisableHudless.value_or_default();
+    const bool hdr10Presentation = config->ForceHDR.value_or_default() &&
+                                   (config->UseHDR10.value_or_default() ||
+                                    State::Instance().activeFgOutput == FGOutput::DLSSG);
+
+    // The cached upscaler output is captured immediately after DLSS SR. In RenoDX HDR10 mode the final
+    // tone-map, grading, BT.2020 conversion and PQ encoding happen later, while rendering to the swapchain.
+    // Passing that pre-final FP16 image alongside the final PQ/BT.2020 backbuffer gives DLSSG two different
+    // color representations. Do not infer a conversion from resource formats; a correct HUD-less input must
+    // instead be captured after the game's/RenoDX's final HDR transform and before UI composition.
+    if (requested && hdr10Presentation)
+    {
+        if (!Dx11HudlessPolicyLogged)
+        {
+            LOG_WARN("Dx11wDx12 disabled upscaler-output HUDless for HDR10 presentation: the resource is "
+                     "pre-tone-map FP16, not final PQ/BT.2020 color; continuing with final color plus MV/depth only");
+            Dx11HudlessPolicyLogged = true;
+        }
+
+        return false;
+    }
+
+    if ((disabled || !requested) && !Dx11HudlessPolicyLogged)
+    {
+        LOG_INFO("Dx11wDx12 upscaler-output HUDless is disabled; using final color plus MV/depth only");
+        Dx11HudlessPolicyLogged = true;
+    }
+
+    return requested && !disabled;
 }
 
 static FG_ResourceValidity GetDx11BridgeResourceValidity()
