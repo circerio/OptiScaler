@@ -42,6 +42,92 @@ static bool _d3d12Captured = false;
 // for showing
 static bool _showRenderImGuiDebugOnce = true;
 
+// ReShade is automatically attached to the hidden D3D11 host swapchain in the
+// DX11 -> D3D12 interop path. That swapchain is never shown, so its Home menu is
+// rendered successfully but cannot reach the display. ReShade exposes an
+// official external-runtime API for swapchains it did not proxy. Use that API
+// on the final D3D12 presenter so the menu is composited on every real (native
+// and generated) present without changing the game/HUD-less resources.
+using PFN_ReShadeCreateEffectRuntime = bool (*)(uint32_t api, void* device, void* commandQueue, void* swapchain,
+                                                 const char* configPath, void** runtime);
+using PFN_ReShadeDestroyEffectRuntime = void (*)(void* runtime);
+using PFN_ReShadeUpdateAndPresentEffectRuntime = void (*)(void* runtime);
+
+static HMODULE g_reshadeModule = nullptr;
+static PFN_ReShadeCreateEffectRuntime g_reshadeCreateEffectRuntime = nullptr;
+static PFN_ReShadeDestroyEffectRuntime g_reshadeDestroyEffectRuntime = nullptr;
+static PFN_ReShadeUpdateAndPresentEffectRuntime g_reshadeUpdateAndPresentEffectRuntime = nullptr;
+static void* g_reshadeVisibleRuntime = nullptr;
+static IDXGISwapChain* g_reshadeVisibleSwapchain = nullptr;
+static HWND g_reshadeVisibleHwnd = nullptr;
+
+static void CleanupVisibleReShadeRuntime(HWND hWnd = nullptr)
+{
+    if (g_reshadeVisibleRuntime == nullptr || (hWnd != nullptr && hWnd != g_reshadeVisibleHwnd))
+        return;
+
+    if (g_reshadeDestroyEffectRuntime != nullptr)
+        g_reshadeDestroyEffectRuntime(g_reshadeVisibleRuntime);
+
+    LOG_INFO("Destroyed ReShade runtime for visible D3D12 FG presenter");
+    g_reshadeVisibleRuntime = nullptr;
+    g_reshadeVisibleSwapchain = nullptr;
+    g_reshadeVisibleHwnd = nullptr;
+}
+
+static void PresentVisibleReShadeRuntime(IDXGISwapChain* swapchain, ID3D12Device* device,
+                                         ID3D12CommandQueue* commandQueue, HWND hWnd)
+{
+    if (!Config::Instance()->LoadReShade.value_or_default() ||
+        State::Instance().swapchainInteropApi != SwapchainInteropApi::Dx11wDx12 || swapchain == nullptr ||
+        device == nullptr || commandQueue == nullptr)
+        return;
+
+    if (g_reshadeVisibleRuntime != nullptr &&
+        (g_reshadeVisibleSwapchain != swapchain || g_reshadeVisibleHwnd != hWnd))
+    {
+        CleanupVisibleReShadeRuntime();
+    }
+
+    if (g_reshadeVisibleRuntime == nullptr)
+    {
+        g_reshadeModule = GetModuleHandleW(L"ReShade64.dll");
+        if (g_reshadeModule == nullptr)
+            return;
+
+        g_reshadeCreateEffectRuntime = reinterpret_cast<PFN_ReShadeCreateEffectRuntime>(
+            GetProcAddress(g_reshadeModule, "ReShadeCreateEffectRuntime"));
+        g_reshadeDestroyEffectRuntime = reinterpret_cast<PFN_ReShadeDestroyEffectRuntime>(
+            GetProcAddress(g_reshadeModule, "ReShadeDestroyEffectRuntime"));
+        g_reshadeUpdateAndPresentEffectRuntime = reinterpret_cast<PFN_ReShadeUpdateAndPresentEffectRuntime>(
+            GetProcAddress(g_reshadeModule, "ReShadeUpdateAndPresentEffectRuntime"));
+
+        if (g_reshadeCreateEffectRuntime == nullptr || g_reshadeDestroyEffectRuntime == nullptr ||
+            g_reshadeUpdateAndPresentEffectRuntime == nullptr)
+        {
+            LOG_WARN("ReShade external-runtime exports are unavailable; visible Home menu cannot be initialized");
+            return;
+        }
+
+        const auto configPath = wstring_to_string((Util::ExePath().parent_path() / L"ReShade.ini").wstring());
+        constexpr uint32_t RESHADE_DEVICE_API_D3D12 = 0xC000;
+        void* runtime = nullptr;
+        if (!g_reshadeCreateEffectRuntime(RESHADE_DEVICE_API_D3D12, device, commandQueue, swapchain,
+                                          configPath.c_str(), &runtime) || runtime == nullptr)
+        {
+            LOG_WARN("Failed to create ReShade runtime for visible D3D12 FG presenter");
+            return;
+        }
+
+        g_reshadeVisibleRuntime = runtime;
+        g_reshadeVisibleSwapchain = swapchain;
+        g_reshadeVisibleHwnd = hWnd;
+        LOG_INFO("ReShade Home menu attached to visible D3D12 FG presenter");
+    }
+
+    g_reshadeUpdateAndPresentEffectRuntime(g_reshadeVisibleRuntime);
+}
+
 static IID streamlineRiid {};
 static bool CheckForRealObject(std::string functionName, IUnknown* pObject, IUnknown** ppRealObject)
 {
@@ -511,6 +597,10 @@ void MenuOverlayDx::CleanupRenderTarget(bool clearQueue, HWND hWnd)
 {
     LOG_FUNC();
 
+    // A manually managed ReShade runtime retains the D3D12 backbuffers. It must
+    // be released before ResizeBuffers and recreated on the next final present.
+    CleanupVisibleReShadeRuntime(hWnd);
+
     auto fg = State::Instance().currentFG;
     if (fg != nullptr && fg->FrameGenerationContext() != nullptr && fg->IsActive())
     {
@@ -564,6 +654,13 @@ void MenuOverlayDx::Present(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             _dx12Device = true;
         }
     }
+
+    // The external ReShade runtime is intentionally updated from this final
+    // presenter path. LocalPresent calls this for every displayed frame, so the
+    // menu is drawn after frame-generation work instead of into the hidden DX11
+    // host that the game renders through.
+    if (cq != nullptr && device12 != nullptr)
+        PresentVisibleReShadeRuntime(pSwapChain, device12, (ID3D12CommandQueue*) currentSCCommandQueue, hWnd);
 
     // Process window handle changed, update base
     if (MenuOverlayBase::Handle() != hWnd)
