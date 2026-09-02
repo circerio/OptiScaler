@@ -169,12 +169,22 @@ Final HDR path 刻意關閉舊的 generic DX11 upscaler-output HUD-less 選項�
 ## Build 與安裝
 
 1. 依 upstream 指示以 `Release | x64` build 此 OptiScaler branch。
-2. 從對應 RenoDX provider branch build `renodx-falcomengine` target。
+2. 從對應 RenoDX provider branch build `falcomengine` target；產物為 `renodx-falcomengine.addon64`。
 3. 從 NVIDIA 取得官方 production/signed Streamline 與 DLSSG runtime。公開 package 不應使用或重散布 development/unsigned plugins。
 4. 依各 upstream 指示安裝 OptiScaler、RenoDX Falcom Engine add-on、Falcom Engine+ 與 ReShade。
 5. 套用上述設定，在遊戲內開啟原生 DLSS Super Resolution，並先從 DLSSG 2x 開始。
 
 此 branch 不包含 NVIDIA binary、遊戲檔案、使用者 log 或 captured frame。
+
+### 原始碼建置驗證
+
+兩個公開原始碼分支在整理公開歷史後，已於 2026-09-03 重新完成 `Release | x64` 建置：
+
+- OptiScaler 產出 `OptiScaler.dll`（SHA-256 `3ED14AAE33445644BE278B42674D793412F6CF15F60BB06F5E10D25948BF5196`）。
+- RenoDX `falcomengine` target 產出 `renodx-falcomengine.addon64`（SHA-256 `DDAE46F88B0DD94E1C3FFC8D80AEA20D9192CA4D4B09D16BF22D6BD347B702DC`）。
+- `dumpbin /exports` 已確認重新建置的 RenoDX add-on 包含 `RenoDX_GetSoraFGResourcesV1`。
+
+這些雜湊只記錄本機建置驗證；binary 不會 commit 或散布。
 
 ## 已知限制與後續驗證
 

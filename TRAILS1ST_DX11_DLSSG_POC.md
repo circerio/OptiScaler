@@ -169,12 +169,22 @@ The old generic DX11 upscaler-output HUD-less option is deliberately disabled in
 ## Building and installation
 
 1. Build this OptiScaler branch as `Release | x64` using the upstream build instructions.
-2. Build the `renodx-falcomengine` target from the matching RenoDX provider branch.
+2. Build the `falcomengine` target from the matching RenoDX provider branch; it produces `renodx-falcomengine.addon64`.
 3. Obtain official production/signed Streamline and DLSSG runtime files from NVIDIA. Do not use or redistribute development/unsigned plugins as a public package.
 4. Install OptiScaler, the RenoDX Falcom Engine add-on, Falcom Engine+ and ReShade according to their upstream instructions.
 5. Apply the configuration above, enable native DLSS Super Resolution in the game, and start with DLSSG 2x.
 
 No NVIDIA binary, game file, user log or captured frame is distributed by this branch.
+
+### Source build verification
+
+Both public source branches were rebuilt as `Release | x64` on 2026-09-03 after their public-history cleanup:
+
+- OptiScaler produced `OptiScaler.dll` (SHA-256 `3ED14AAE33445644BE278B42674D793412F6CF15F60BB06F5E10D25948BF5196`).
+- RenoDX target `falcomengine` produced `renodx-falcomengine.addon64` (SHA-256 `DDAE46F88B0DD94E1C3FFC8D80AEA20D9192CA4D4B09D16BF22D6BD347B702DC`).
+- `dumpbin /exports` confirmed `RenoDX_GetSoraFGResourcesV1` in the rebuilt RenoDX add-on.
+
+These hashes document the local build check only; the binaries are not committed or distributed.
 
 ## Known limitations and required follow-up
 
