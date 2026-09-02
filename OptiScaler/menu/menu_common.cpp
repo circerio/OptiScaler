@@ -4085,15 +4085,6 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             LOG_DEBUG("Changed set FGDLSSGUseGamesReflexMarkers: {}", useGamesMarkers);
         }
         ImGui::EndDisabled();
-
-        bool uiRecomposition = config->FGDLSSGUIRecomposition.value_or_default();
-        if (ImGui::Checkbox("UI Recomposition (Preset B)", &uiRecomposition))
-        {
-            config->FGDLSSGUIRecomposition = uiRecomposition;
-            LOG_INFO("DLSSG UI Recomposition (Preset B) set to: {}", uiRecomposition);
-        }
-        ShowHelpMarker("Enables DLSS Frame Generation UI Recomposition (Preset B).\n"
-                       "Best results require both HUD-less color and a separate UI alpha/color buffer.");
     }
 
     // OptiFG

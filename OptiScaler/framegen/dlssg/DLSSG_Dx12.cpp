@@ -362,23 +362,9 @@ bool DLSSG_Dx12::Dispatch()
     options.mode = sl::DLSSGMode::eOn;
     options.numFramesToGenerate = _framesToInterpolate;
     options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
-    const bool uiRecomposition = Config::Instance()->FGDLSSGUIRecomposition.value_or_default();
-    options.enableUserInterfaceRecomposition =
-        uiRecomposition ? sl::Boolean::eTrue : sl::Boolean::eFalse;
-
-    if (!_lastUIRecomposition.has_value() || _lastUIRecomposition.value() != uiRecomposition)
-    {
-        LOG_INFO("DLSSG UI Recomposition (Preset B): {}", uiRecomposition ? "enabled" : "disabled");
-        _lastUIRecomposition = uiRecomposition;
-        _warnedUIRecompositionWithoutUI = false;
-    }
-
-    if (uiRecomposition && _noUi[fIndex] && !_warnedUIRecompositionWithoutUI)
-    {
-        LOG_WARN("DLSSG UI Recomposition is enabled, but no UI Color/Alpha resource was supplied; "
-                 "the runtime may fall back until a UI buffer is tagged");
-        _warnedUIRecompositionWithoutUI = true;
-    }
+    // Preset B needs a separate UI Color/Alpha resource. The DX11 integration does not supply one,
+    // so keep recomposition explicitly disabled instead of allowing a partial/fallback code path.
+    options.enableUserInterfaceRecomposition = sl::Boolean::eFalse;
 
     if (Config::Instance()->FGDLSSGForceDMFG.value_or_default())
     {
