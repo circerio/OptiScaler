@@ -362,9 +362,34 @@ bool DLSSG_Dx12::Dispatch()
     options.mode = sl::DLSSGMode::eOn;
     options.numFramesToGenerate = _framesToInterpolate;
     options.queueParallelismMode = sl::DLSSGQueueParallelismMode::eBlockPresentingClientQueue;
-    // Preset B needs a separate UI Color/Alpha resource. The DX11 integration does not supply one,
-    // so keep recomposition explicitly disabled instead of allowing a partial/fallback code path.
-    options.enableUserInterfaceRecomposition = sl::Boolean::eFalse;
+
+    const bool haveRecompositionResources = !_noHudless[fIndex] && !_noUi[fIndex] &&
+                                            _frameResources[fIndex].contains(FG_ResourceType::HudlessColor) &&
+                                            _frameResources[fIndex].contains(FG_ResourceType::UIColor) &&
+                                            _frameResources[fIndex][FG_ResourceType::HudlessColor].GetResource() !=
+                                                nullptr &&
+                                            _frameResources[fIndex][FG_ResourceType::UIColor].GetResource() != nullptr;
+    options.enableUserInterfaceRecomposition =
+        haveRecompositionResources ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+
+    if (haveRecompositionResources)
+    {
+        const auto hudlessDesc =
+            _frameResources[fIndex][FG_ResourceType::HudlessColor].GetResource()->GetDesc();
+        const auto uiDesc = _frameResources[fIndex][FG_ResourceType::UIColor].GetResource()->GetDesc();
+        options.hudLessBufferFormat = static_cast<uint32_t>(hudlessDesc.Format);
+        options.uiBufferFormat = static_cast<uint32_t>(uiDesc.Format);
+        options.colorWidth = static_cast<uint32_t>(hudlessDesc.Width);
+        options.colorHeight = hudlessDesc.Height;
+        options.colorBufferFormat = static_cast<uint32_t>(DXGI_FORMAT_R10G10B10A2_UNORM);
+    }
+
+    static std::optional<bool> lastRecompositionState;
+    if (!lastRecompositionState.has_value() || lastRecompositionState.value() != haveRecompositionResources)
+    {
+        LOG_INFO("DLSSG UI recomposition: {}", haveRecompositionResources ? "enabled" : "disabled");
+        lastRecompositionState = haveRecompositionResources;
+    }
 
     if (Config::Instance()->FGDLSSGForceDMFG.value_or_default())
     {

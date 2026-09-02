@@ -7,6 +7,7 @@
 #include "d3d11_4.h"
 #include "d3d12.h"
 
+#include <array>
 #include <vector>
 
 class DECLSPEC_UUID("23b064bb-482d-416c-93b1-829acedfb3d0") Dx11wDx12SC final : public IDXGISwapChain4
@@ -88,6 +89,16 @@ class DECLSPEC_UUID("23b064bb-482d-416c-93b1-829acedfb3d0") Dx11wDx12SC final : 
     UINT _GetDx11BackBufferIndexForPresent() const;
     void _AdvanceFakeBackBufferIndex();
     bool _WaitForInteropCopyOnPresentQueue();
+    bool _ImportSoraFGResources();
+    void _ReleaseSoraFGResources();
+
+    struct SoraFGOpenedResources
+    {
+        HANDLE hudlessHandle = nullptr;
+        HANDLE uiHandle = nullptr;
+        ID3D12Resource* hudless = nullptr;
+        ID3D12Resource* ui = nullptr;
+    };
 
     IDXGISwapChain* _real = nullptr;
     IDXGISwapChain1* _real1 = nullptr;
@@ -131,6 +142,10 @@ class DECLSPEC_UUID("23b064bb-482d-416c-93b1-829acedfb3d0") Dx11wDx12SC final : 
     std::vector<ID3D12Resource*> _openedDx11BackBuffers;
     std::vector<HANDLE> _sharedBackBufferHandles;
     std::vector<D3D12_RESOURCE_STATES> _openedDx11BackBufferStates;
+
+    std::array<SoraFGOpenedResources, 4> _soraFGResources {};
+    uint64_t _lastSoraFGFrame = 0;
+    bool _soraFGInteropLogged = false;
 
     UINT _bufferCount = 0;
     UINT _currentFakeIndex = 0;

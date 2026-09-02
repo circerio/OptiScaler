@@ -80,6 +80,30 @@ DXGI_FORMAT ResolveBufferFormat(IDXGISwapChain* swapchain, IDXGISwapChain1* swap
 
     return DXGI_FORMAT_UNKNOWN;
 }
+
+constexpr uint32_t SORA_FG_INTEROP_VERSION = 1;
+constexpr uint32_t SORA_FG_FLAG_HUDLESS = 1u << 0;
+constexpr uint32_t SORA_FG_FLAG_UI = 1u << 1;
+constexpr uint32_t SORA_FG_FLAG_HDR10_PQ_BT2020 = 1u << 2;
+constexpr uint32_t SORA_FG_FLAG_UI_PREMULTIPLIED = 1u << 3;
+constexpr uint32_t SORA_FG_FLAG_UI_FP16 = 1u << 4;
+
+struct SoraFGInteropResourcesV1
+{
+    uint32_t structSize;
+    uint32_t version;
+    uint64_t frameId;
+    uint32_t width;
+    uint32_t height;
+    uint32_t hudlessFormat;
+    uint32_t uiFormat;
+    uint32_t flags;
+    uint32_t reserved;
+    HANDLE hudlessHandle;
+    HANDLE uiHandle;
+};
+
+using PFN_RenoDX_GetSoraFGResourcesV1 = BOOL (*)(SoraFGInteropResourcesV1* output);
 } // namespace
 
 bool Dx11wDx12SC::IsHdrInteropRequested()
@@ -344,6 +368,10 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::Present(UINT SyncInterval, UINT Flags)
     if (!_WaitDx11ThenDx12())
         return DXGI_ERROR_DEVICE_REMOVED;
 
+    // RenoDX records its HUD-less/UI passes on this same immediate context,
+    // so the fence above also makes those shared resources ready for D3D12.
+    _ImportSoraFGResources();
+
     if (!_CopyDx11SharedToDx12FGBackBuffer(dx11Index))
         return DXGI_ERROR_DEVICE_REMOVED;
 
@@ -385,6 +413,161 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::Present(UINT SyncInterval, UINT Flags)
         LOG_ERROR("fg Present failed: {:X}", (UINT) result);
 
     return result;
+}
+
+bool Dx11wDx12SC::_ImportSoraFGResources()
+{
+    if (_fg == nullptr || _dx12Device == nullptr || State::Instance().activeFgOutput != FGOutput::DLSSG ||
+        !_fg->IsActive() || _fg->IsPaused())
+        return false;
+
+    const auto module = GetModuleHandleW(L"renodx-falcomengine.addon64");
+    if (module == nullptr)
+        return false;
+
+    const auto getResources = reinterpret_cast<PFN_RenoDX_GetSoraFGResourcesV1>(
+        GetProcAddress(module, "RenoDX_GetSoraFGResourcesV1"));
+    if (getResources == nullptr)
+        return false;
+
+    SoraFGInteropResourcesV1 info {};
+    info.structSize = sizeof(info);
+    if (!getResources(&info) || info.version != SORA_FG_INTEROP_VERSION || info.frameId == 0 ||
+        info.frameId == _lastSoraFGFrame)
+    {
+        return false;
+    }
+
+    constexpr uint32_t requiredFlags = SORA_FG_FLAG_HUDLESS | SORA_FG_FLAG_UI |
+                                       SORA_FG_FLAG_HDR10_PQ_BT2020 | SORA_FG_FLAG_UI_PREMULTIPLIED |
+                                       SORA_FG_FLAG_UI_FP16;
+    if ((info.flags & requiredFlags) != requiredFlags || info.hudlessHandle == nullptr || info.uiHandle == nullptr ||
+        info.hudlessFormat != DXGI_FORMAT_R10G10B10A2_UNORM ||
+        info.uiFormat != DXGI_FORMAT_R16G16B16A16_FLOAT || info.width == 0 || info.height == 0 ||
+        _bufferFormat != DXGI_FORMAT_R10G10B10A2_UNORM)
+    {
+        LOG_ERROR("RenoDX Sora FG resource contract mismatch. frame {}, flags {:X}, formats {}/{} size {}x{}",
+                  info.frameId, info.flags, info.hudlessFormat, info.uiFormat, info.width, info.height);
+        return false;
+    }
+
+    SoraFGOpenedResources* opened = nullptr;
+    for (auto& slot : _soraFGResources)
+    {
+        if (slot.hudlessHandle == info.hudlessHandle && slot.uiHandle == info.uiHandle)
+        {
+            opened = &slot;
+            break;
+        }
+    }
+
+    if (opened == nullptr)
+    {
+        for (auto& slot : _soraFGResources)
+        {
+            if (slot.hudless == nullptr && slot.ui == nullptr)
+            {
+                opened = &slot;
+                break;
+            }
+        }
+    }
+
+    // A fifth unique handle means RenoDX recreated the four-slot set, for
+    // example after a resolution change. Drop the old D3D12 views as a unit.
+    if (opened == nullptr)
+    {
+        _ReleaseSoraFGResources();
+        opened = &_soraFGResources[0];
+    }
+
+    if (opened->hudless == nullptr || opened->ui == nullptr)
+    {
+        SafeRelease(opened->hudless);
+        SafeRelease(opened->ui);
+        opened->hudlessHandle = info.hudlessHandle;
+        opened->uiHandle = info.uiHandle;
+
+        auto result = _dx12Device->OpenSharedHandle(info.hudlessHandle, IID_PPV_ARGS(&opened->hudless));
+        if (FAILED(result) || opened->hudless == nullptr)
+        {
+            LOG_ERROR("OpenSharedHandle for RenoDX Sora HUD-less failed: {:X}", (UINT) result);
+            return false;
+        }
+
+        result = _dx12Device->OpenSharedHandle(info.uiHandle, IID_PPV_ARGS(&opened->ui));
+        if (FAILED(result) || opened->ui == nullptr)
+        {
+            LOG_ERROR("OpenSharedHandle for RenoDX Sora UI failed: {:X}", (UINT) result);
+            SafeRelease(opened->hudless);
+            return false;
+        }
+
+        const auto hudlessDesc = opened->hudless->GetDesc();
+        const auto uiDesc = opened->ui->GetDesc();
+        if (hudlessDesc.Width != info.width || hudlessDesc.Height != info.height ||
+            hudlessDesc.Format != DXGI_FORMAT_R10G10B10A2_UNORM || uiDesc.Width != info.width ||
+            uiDesc.Height != info.height || uiDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
+        {
+            LOG_ERROR("Opened RenoDX Sora FG resource descriptions do not match the export contract");
+            SafeRelease(opened->hudless);
+            SafeRelease(opened->ui);
+            return false;
+        }
+    }
+
+    const int frameIndex = _fg->GetIndex();
+    Dx12Resource hudless {};
+    hudless.type = FG_ResourceType::HudlessColor;
+    hudless.resource = opened->hudless;
+    hudless.width = info.width;
+    hudless.height = info.height;
+    hudless.state = D3D12_RESOURCE_STATE_COMMON;
+    hudless.validity = FG_ResourceValidity::UntilPresent;
+    hudless.frameIndex = frameIndex;
+
+    Dx12Resource ui {};
+    ui.type = FG_ResourceType::UIColor;
+    ui.resource = opened->ui;
+    ui.width = info.width;
+    ui.height = info.height;
+    ui.state = D3D12_RESOURCE_STATE_COMMON;
+    ui.validity = FG_ResourceValidity::UntilPresent;
+    ui.frameIndex = frameIndex;
+
+    // UI alone is inert without HUD-less/recomposition. Tag it first so an
+    // unexpected second-call failure cannot leave DLSSG consuming HUD-less
+    // while interpolating the final UI as part of the scene.
+    const bool uiAccepted = _fg->SetResource(&ui);
+    const bool hudlessAccepted = uiAccepted && _fg->SetResource(&hudless);
+    if (!hudlessAccepted || !uiAccepted)
+    {
+        LOG_WARN("RenoDX Sora FG resources were not accepted for frame {} (HUD-less {}, UI {})", info.frameId,
+                 hudlessAccepted, uiAccepted);
+        return false;
+    }
+
+    _lastSoraFGFrame = info.frameId;
+    if (!_soraFGInteropLogged)
+    {
+        LOG_INFO("RenoDX Sora FG interop active: HUD-less R10 PQ/BT.2020 + premultiplied UI RGBA16F, {}x{}",
+                 info.width, info.height);
+        _soraFGInteropLogged = true;
+    }
+    return true;
+}
+
+void Dx11wDx12SC::_ReleaseSoraFGResources()
+{
+    for (auto& slot : _soraFGResources)
+    {
+        SafeRelease(slot.hudless);
+        SafeRelease(slot.ui);
+        slot.hudlessHandle = nullptr;
+        slot.uiHandle = nullptr;
+    }
+    _lastSoraFGFrame = 0;
+    _soraFGInteropLogged = false;
 }
 
 HRESULT STDMETHODCALLTYPE Dx11wDx12SC::GetBuffer(UINT Buffer, REFIID riid, void** ppSurface)
@@ -1223,6 +1406,7 @@ bool Dx11wDx12SC::_WaitForCopyQueueIdle()
 void Dx11wDx12SC::_ReleaseInteropBackBuffers()
 {
     _interopInitialized = false;
+    _ReleaseSoraFGResources();
 
     for (auto& resource : _openedDx11BackBuffers)
         SafeRelease(resource);
