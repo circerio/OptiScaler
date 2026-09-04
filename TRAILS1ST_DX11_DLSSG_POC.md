@@ -33,9 +33,9 @@ This is engine-aware Frame Generation. It is not equivalent to Lossless Scaling,
 ## Current source references
 
 - OptiScaler upstream base: `4f17a05da871a583b9313ee74d33acfcf074a03d`
-- OptiScaler proof-of-concept code before this report: `620f06334a74a4b9a8f10abee2a2ba45c38f58cd`
+- Previous public OptiScaler checkpoint before the 2026-09-05 optimization pass: `1726c716ebfba875a0cae0805282fd57a8cb8985`
 - RenoDX upstream base: `1e7366dde741c551de218ea4b5c7190bcd6ac595`
-- RenoDX game provider: `b1811b9270f0fc5a55be7a0ce973452b8dde7fbb`
+- RenoDX game provider used by the final build: `9bf173f6d18b98beb003d15ba1496e25aa8bc8d8`
 - RenoDX provider branch: `https://github.com/circerio/renodx/tree/public/trails1st-dx11-dlssg-provider`
 
 The OptiScaler branch is intentionally kept as a proof-of-concept series. It still contains experimental history and game-specific coupling. It should be refactored into smaller generic changes before any upstream pull request.

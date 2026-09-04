@@ -33,9 +33,9 @@ Falcom DirectX 11 renderer
 ## Source 版本
 
 - OptiScaler upstream base：`4f17a05da871a583b9313ee74d33acfcf074a03d`
-- 此報告加入前的 OptiScaler PoC code：`620f06334a74a4b9a8f10abee2a2ba45c38f58cd`
+- 2026-09-05 成本最佳化前的 OptiScaler 公開 checkpoint：`1726c716ebfba875a0cae0805282fd57a8cb8985`
 - RenoDX upstream base：`1e7366dde741c551de218ea4b5c7190bcd6ac595`
-- RenoDX game provider：`b1811b9270f0fc5a55be7a0ce973452b8dde7fbb`
+- Final build 使用的 RenoDX game provider：`9bf173f6d18b98beb003d15ba1496e25aa8bc8d8`
 - RenoDX provider branch：`https://github.com/circerio/renodx/tree/public/trails1st-dx11-dlssg-provider`
 
 OptiScaler branch 刻意保留為 PoC commit series，目前仍有實驗歷史與遊戲專用 coupling；送 upstream PR 前應拆成較小、通用的變更。
