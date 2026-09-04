@@ -46,7 +46,7 @@ The OptiScaler branch is intentionally kept as a proof-of-concept series. It sti
 
 RenoDX keeps the HDR-critical render resources in `DXGI_FORMAT_R16G16B16A16_FLOAT`. Runtime resource-upgrade logs show the relevant full-resolution resources upgraded from `R11G11B10_FLOAT` to `R16G16B16A16_FLOAT`.
 
-The game-specific Frame Generation additions do not replace visible RGB tone mapping, grading, bloom, TAA, lighting, or Falcom Engine+ processing. The only visible-pipeline shader change is alpha initialization for later UI coverage capture. RGB is unchanged.
+The game-specific Frame Generation additions do not replace visible RGB tone mapping, grading, bloom, TAA, lighting, or Falcom Engine+ processing. The scene and final shaders expose additional MRT outputs, while the visible `SV_Target0` operations remain equivalent. RGB is unchanged.
 
 ### Final representation
 
@@ -67,10 +67,12 @@ The previous scRGB path used an FP16 `extended_srgb_linear` swapchain. The curre
 
 The RenoDX provider maintains four slots. Each slot contains:
 
-1. An FP16 HUD-less linear scene capture.
-2. A final HDR10 PQ copy.
-3. A shared HDR10 PQ HUD-less texture.
-4. A shared RGBA16F premultiplied UI texture.
+1. An FP16 HUD-less linear scene render target/SRV.
+2. A shared HDR10 PQ HUD-less texture.
+3. A shared RGBA16F premultiplied UI texture.
+4. A local final HDR10 PQ resource retained for the compatibility fallback.
+
+The active path fuses both exports into renderer passes that already exist. The pre-HUD FP16 scene pass writes the HUD-less slot as a second MRT, bypassing the old 4K RGBA16F `CopyResource`. The final pass writes visible Final, HDR10 HUD-less and FP16 UI simultaneously. Pixels with exactly zero UI coverage reuse the already encoded Final as HUD-less; any non-zero alpha keeps the full high-precision HUD-less encode and UI calculation. The previous copy plus two-draw producer remains available when the MRT preconditions are not met.
 
 The provider exports a versioned structure through `RenoDX_GetSoraFGResourcesV1`. OptiScaler opens the shared handles on its D3D12 device, validates size, format and flags, and tags the matching resources for the current frame. A fifth unique handle is treated as provider resource recreation and resets the opened set.
 
@@ -121,7 +123,7 @@ The final build has been runtime-verified at 3840 x 2160, 240 Hz HDR on:
 - MSI MPG322UX OLED using RGB 10 bits per color channel
 - DLSSG 2x in the latest logged session
 
-User-visible checks passed for color, HUD appearance, input feel, movement, menus and combat during iterative testing. DLSSG 4x was also exercised earlier; presentation uniformity improved substantially after disabling V-Sync, but 4x remains experimental.
+User-visible checks passed for color, HDR highlights, HUD appearance and transitions, input feel, movement, menus and combat during iterative testing. ReShade Home was also revalidated after the final lifetime patch. DLSSG 2x, 3x and 4x actual present ratios were measured; presentation uniformity improved substantially after disabling V-Sync, but 4x remains experimental.
 
 The final HDR/UI build has not yet passed a long-duration soak test. The host system also had unrelated instability, so no crash attribution or broad stability claim is made.
 
@@ -145,6 +147,13 @@ UseGamesReflexMarkers = false
 [OptiFG]
 UseDx11UpscalerOutputAsHudless = false
 Dx11ResourcesValidUntilPresent = true
+DisableHUDFix = true
+
+[Dx11withDx12]
+DeferFGInputSyncToPresent = true
+DedicatedInteropQueue = true
+NonBlockingHiddenPresent = false
+SkipHiddenPresent = false
 
 [Framerate]
 FramerateLimit = 0
@@ -178,13 +187,26 @@ No NVIDIA binary, game file, user log or captured frame is distributed by this b
 
 ### Source build verification
 
-Both public source branches were rebuilt as `Release | x64` on 2026-09-03 after their public-history cleanup:
+Both public source branches were rebuilt as `Release | x64` on 2026-09-05 after the provider cost and resource-lifetime work:
 
-- OptiScaler produced `OptiScaler.dll` (SHA-256 `3ED14AAE33445644BE278B42674D793412F6CF15F60BB06F5E10D25948BF5196`).
-- RenoDX target `falcomengine` produced `renodx-falcomengine.addon64` (SHA-256 `DDAE46F88B0DD94E1C3FFC8D80AEA20D9192CA4D4B09D16BF22D6BD347B702DC`).
+- OptiScaler produced `OptiScaler.dll` (SHA-256 `CEA9797A13E3A1D8C785572B1E15E8AD0DE6698564B632743D1967DA52DA38A4`).
+- RenoDX target `falcomengine` produced `renodx-falcomengine.addon64` (SHA-256 `6E2EE9CCABE0F693CEFFC4B312BE886C0D215288719B262CADC96C177DDDCD0D`).
 - `dumpbin /exports` confirmed `RenoDX_GetSoraFGResourcesV1` in the rebuilt RenoDX add-on.
 
 These hashes document the local build check only; the binaries are not committed or distributed.
+
+### Frame-generation cost
+
+Clean PresentMon 2.3.1 captures used unique sessions and `--terminate_after_timed`. With the optimized high-quality provider, paired measurements on the matched test scene were:
+
+| Mode | Source time | Source FPS | Output FPS | Cost versus FG OFF |
+|---|---:|---:|---:|---:|
+| FG OFF | 17.7802 ms | 56.24 | 56.23 | — |
+| 2x | 19.9407 ms | 50.15 | 100.32 | +2.1606 ms |
+| 3x | 21.3271 ms | 46.89 | 140.74 | +3.5469 ms |
+| 4x | 23.0007 ms | 43.48 | 173.98 | +5.2205 ms |
+
+The original high-quality RenoDX producer cost approximately 0.58–0.64 ms/source frame. Fusing the FP16 scene capture and HDR10/UI export into existing renderer passes reduced the measured 2x source time by 0.3887 ms (1.95%) and left approximately 0.19 ms of title-specific provider cost. Opti import CPU time was approximately 0.009 ms. The remaining multiplier-dependent cost is primarily DLSSG/MFG inference and presenter back-pressure rather than a generic tracking or extra-copy path.
 
 ## Known limitations and required follow-up
 
@@ -195,7 +217,7 @@ These hashes document the local build check only; the binaries are not committed
 - SDR presentation and non-RenoDX fallback behavior need independent validation.
 - The provider ABI and OptiScaler import path are hard-coded for this game.
 - The branch should be tested against upscaler/DLSSG lifecycle resets and resource-transition handling before upstreaming.
-- Performance cost and click-to-photon latency have not been measured with dedicated instrumentation.
+- Performance cost and present pacing were measured with PresentMon and targeted internal timing. End-to-end click-to-photon latency still requires independent hardware instrumentation.
 - HDR screenshots captured through ordinary SDR tools are not reliable evidence of HDR luminance or color accuracy.
 
 ## Upstreaming recommendation

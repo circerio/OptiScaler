@@ -472,6 +472,11 @@ class Config
     // dx11wdx12
     CustomOptional<bool> Dx11DelayedInit { false };
     CustomOptional<bool> DontUseNTShared { true };
+    CustomOptional<bool> Dx11DedicatedInteropQueue { false };
+    CustomOptional<bool> Dx11DeferFGInputSyncToPresent { false };
+    CustomOptional<bool> Dx11NonBlockingHiddenPresent { false };
+    CustomOptional<bool> Dx11SkipHiddenPresent { false };
+    CustomOptional<int, NoDefault> Dx11FGMaximumFrameLatency;
 
     // vulkanwdx12
     CustomOptional<bool> VulkanUseCopyForInputs { false };

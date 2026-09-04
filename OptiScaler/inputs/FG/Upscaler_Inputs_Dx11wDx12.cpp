@@ -12,6 +12,7 @@ static bool Dx11HudlessCaptureLogged = false;
 static bool Dx11HudlessFallbackLogged = false;
 static bool Dx11HudlessPolicyLogged = false;
 static std::optional<bool> Dx11ResourceLifetimeLogged = std::nullopt;
+static std::optional<bool> Dx11DeferredInputSyncLogged = std::nullopt;
 
 static Dx11WithDx12::ResourceMask GetRequiredFgResourceMask()
 {
@@ -81,11 +82,21 @@ static bool PrepareFgResourceCache(NVSDK_NGX_Parameter* parameters, UINT64 frame
         mask |= Dx11WithDx12::ResourceMask::Output;
 
     const auto dontUseNtShared = Config::Instance()->DontUseNTShared.value_or_default();
+    const bool deferSyncToPresent = Config::Instance()->FGDx11ResourcesValidUntilPresent.value_or_default() &&
+                                    Config::Instance()->Dx11DeferFGInputSyncToPresent.value_or_default();
+
+    if (!Dx11DeferredInputSyncLogged.has_value() || Dx11DeferredInputSyncLogged.value() != deferSyncToPresent)
+    {
+        LOG_INFO("Dx11wDx12 FG input synchronization: {}",
+                 deferSyncToPresent ? "deferred to final Present fence" : "immediate after input preparation");
+        Dx11DeferredInputSyncLogged = deferSyncToPresent;
+    }
+
     const auto frameIndex =
         captureHudless ? (UINT) (frameKey % DX11_WITH_DX12_CACHED_FRAMES) : Dx11WithDx12::GetUpscalerFrameIndex();
 
     auto result = Dx11WithDx12::PrepareUpscalerResources(parameters, mask, frameIndex, frameKey, dontUseNtShared, false,
-                                                         true, captureHudless);
+                                                         !deferSyncToPresent, captureHudless);
 
     // The upscaler output is an optional quality improvement. Keep MV/depth FG alive when it cannot be shared.
     if (!result.Success && captureHudless)
@@ -97,7 +108,7 @@ static bool PrepareFgResourceCache(NVSDK_NGX_Parameter* parameters, UINT64 frame
         }
 
         result = Dx11WithDx12::PrepareUpscalerResources(parameters, requiredMask, frameIndex, frameKey, dontUseNtShared,
-                                                        false, true);
+                                                        false, !deferSyncToPresent);
     }
 
     if (!result.Success)

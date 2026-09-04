@@ -35,6 +35,7 @@ class FGHooks
     using PFN_ResizeTarget = rewrite_signature<decltype(&IDXGISwapChain::ResizeTarget)>::type;
     using PFN_GetFrameLatencyWaitableObject =
         rewrite_signature<decltype(&IDXGISwapChain2::GetFrameLatencyWaitableObject)>::type;
+    using PFN_SetMaximumFrameLatency = rewrite_signature<decltype(&IDXGISwapChain2::SetMaximumFrameLatency)>::type;
     using PFN_Release = rewrite_signature<decltype(&IUnknown::Release)>::type;
 
     inline static PFN_ResizeBuffers o_FGSCResizeBuffers = nullptr;
@@ -47,6 +48,7 @@ class FGHooks
     inline static PFN_Present1 o_FGSCPresent1 = nullptr;
     inline static PFN_Release o_FGRelease = nullptr;
     inline static PFN_GetFrameLatencyWaitableObject o_FGSCGetFrameLatencyWaitableObject = nullptr;
+    inline static PFN_SetMaximumFrameLatency o_FGSCSetMaximumFrameLatency = nullptr;
     inline static HWND _hwnd = nullptr;
     inline static IDXGISwapChain* _dx12InteropPresentSC = nullptr;
     inline static HWND _dx12InteropPresentHwnd = nullptr;
@@ -77,6 +79,7 @@ class FGHooks
                              const DXGI_PRESENT_PARAMETERS* pPresentParameters);
 
     static HANDLE hkGetFrameLatencyWaitableObject(IDXGISwapChain2* This);
+    static HRESULT hkSetMaximumFrameLatency(IDXGISwapChain2* This, UINT MaxLatency);
 
     VALIDATE_MEMBER_HOOK(hkFGPresent, PFN_Present)
     VALIDATE_MEMBER_HOOK(hkFGPresent1, PFN_Present1)
@@ -87,5 +90,6 @@ class FGHooks
     VALIDATE_MEMBER_HOOK(hkResizeBuffers1, PFN_ResizeBuffers1)
     VALIDATE_MEMBER_HOOK(hkResizeTarget, PFN_ResizeTarget)
     VALIDATE_MEMBER_HOOK(hkGetFrameLatencyWaitableObject, PFN_GetFrameLatencyWaitableObject)
+    VALIDATE_MEMBER_HOOK(hkSetMaximumFrameLatency, PFN_SetMaximumFrameLatency)
     VALIDATE_MEMBER_HOOK(hkFGRelease, PFN_Release)
 };

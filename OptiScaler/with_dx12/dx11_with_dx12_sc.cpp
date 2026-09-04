@@ -14,6 +14,8 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 
+#include <chrono>
+
 #pragma intrinsic(_ReturnAddress)
 
 static int scCount = 0;
@@ -104,6 +106,8 @@ struct SoraFGInteropResourcesV1
 };
 
 using PFN_RenoDX_GetSoraFGResourcesV1 = BOOL (*)(SoraFGInteropResourcesV1* output);
+using PFN_RenoDX_NotifySoraFGFrameBoundaryV1 = BOOL (*)();
+using PFN_RenoDX_NotifyFalcomEnginePlusFrameBoundaryV1 = BOOL (*)();
 } // namespace
 
 bool Dx11wDx12SC::IsHdrInteropRequested()
@@ -345,6 +349,9 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::GetDevice(REFIID riid, void** ppDevice)
 
 HRESULT STDMETHODCALLTYPE Dx11wDx12SC::Present(UINT SyncInterval, UINT Flags)
 {
+    using PerfClock = std::chrono::steady_clock;
+    const auto perfStart = PerfClock::now();
+
     if (_real == nullptr || _fgSwapChain == nullptr)
         return DXGI_ERROR_DEVICE_REMOVED;
 
@@ -362,21 +369,32 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::Present(UINT SyncInterval, UINT Flags)
     if (!_RequestSharedBackBuffer(dx11Index))
         return DXGI_ERROR_DEVICE_REMOVED;
 
+    auto perfStageStart = PerfClock::now();
     if (!_CopyDx11BackBufferToShared(dx11Index))
         return DXGI_ERROR_DEVICE_REMOVED;
+    const auto perfAfterDx11Copy = PerfClock::now();
 
     if (!_WaitDx11ThenDx12())
         return DXGI_ERROR_DEVICE_REMOVED;
+    const auto perfAfterDx11Sync = PerfClock::now();
 
     // RenoDX records its HUD-less/UI passes on this same immediate context,
     // so the fence above also makes those shared resources ready for D3D12.
-    _ImportSoraFGResources();
+    // When both resources are disabled, do not poll the provider: its consumer
+    // heartbeat will expire and RenoDX can stop the producer-side capture and
+    // composition passes as well.
+    const auto config = Config::Instance();
+    if (!config->FGDisableHudless.value_or_default() || !config->FGDisableUI.value_or_default())
+        _ImportSoraFGResources();
+    const auto perfAfterResourceImport = PerfClock::now();
 
     if (!_CopyDx11SharedToDx12FGBackBuffer(dx11Index))
         return DXGI_ERROR_DEVICE_REMOVED;
+    const auto perfAfterDx12CopySubmit = PerfClock::now();
 
     if (!_WaitForInteropCopyOnPresentQueue())
         return DXGI_ERROR_DEVICE_REMOVED;
+    const auto perfAfterPresentQueueWait = PerfClock::now();
 
     const bool fgHookedPresenter =
         State::Instance().currentFGSwapchain == _fgSwapChain && !FGHooks::IsDx12InteropPresentSC(_fgSwapChain);
@@ -394,23 +412,110 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::Present(UINT SyncInterval, UINT Flags)
               dx11Index, _real3 != nullptr ? _real3->GetCurrentBackBufferIndex() : 0xFFFFFFFF, _currentFakeIndex,
               _bufferCount);
 
-    if (_real != nullptr)
+    auto perfBeforeHiddenPresent = PerfClock::now();
+    const bool skipHiddenPresent = Config::Instance()->Dx11SkipHiddenPresent.value_or_default();
+    const bool nonBlockingHiddenPresent =
+        Config::Instance()->Dx11NonBlockingHiddenPresent.value_or_default();
+    bool providerBoundaryNotified = false;
+    if (skipHiddenPresent)
+    {
+        const auto module = GetModuleHandleW(L"renodx-falcomengine.addon64");
+        if (module != nullptr)
+        {
+            const auto notifyFrameBoundary = reinterpret_cast<PFN_RenoDX_NotifySoraFGFrameBoundaryV1>(
+                GetProcAddress(module, "RenoDX_NotifySoraFGFrameBoundaryV1"));
+            providerBoundaryNotified = notifyFrameBoundary != nullptr && notifyFrameBoundary();
+        }
+
+        const auto plusModule = GetModuleHandleW(L"renodx-falcomengine-plus.addon64");
+        if (providerBoundaryNotified && plusModule != nullptr)
+        {
+            const auto notifyPlusFrameBoundary =
+                reinterpret_cast<PFN_RenoDX_NotifyFalcomEnginePlusFrameBoundaryV1>(
+                    GetProcAddress(plusModule, "RenoDX_NotifyFalcomEnginePlusFrameBoundaryV1"));
+            providerBoundaryNotified =
+                notifyPlusFrameBoundary != nullptr && notifyPlusFrameBoundary();
+        }
+
+        if (providerBoundaryNotified)
+            ++_perfProviderBoundaryCount;
+    }
+
+    if (_real != nullptr && !providerBoundaryNotified)
     {
         UINT realFlags = Flags;
 
-        // Do not wait for it
+        if (nonBlockingHiddenPresent)
+            realFlags |= DXGI_PRESENT_DO_NOT_WAIT;
+
         auto realPresentResult = _real->Present(0, realFlags);
 
-        if (FAILED(realPresentResult))
+        if (realPresentResult == DXGI_ERROR_WAS_STILL_DRAWING)
+            ++_perfHiddenPresentWouldBlockCount;
+        else if (SUCCEEDED(realPresentResult))
+            ++_perfHiddenPresentSuccessCount;
+        else
             LOG_WARN("hidden real DX11 Present failed: {:X}", (UINT) realPresentResult);
     }
+    const auto perfAfterHiddenPresent = PerfClock::now();
 
     auto result = _fgSwapChain->Present(SyncInterval, Flags);
+    const auto perfAfterFgPresent = PerfClock::now();
 
     if (SUCCEEDED(result))
         _AdvanceFakeBackBufferIndex();
     else
         LOG_ERROR("fg Present failed: {:X}", (UINT) result);
+
+    const auto elapsedMs = [](auto begin, auto end) {
+        return std::chrono::duration<double, std::milli>(end - begin).count();
+    };
+
+    _perfDx11CopyMs += elapsedMs(perfStageStart, perfAfterDx11Copy);
+    _perfDx11SyncMs += elapsedMs(perfAfterDx11Copy, perfAfterDx11Sync);
+    _perfResourceImportMs += elapsedMs(perfAfterDx11Sync, perfAfterResourceImport);
+    _perfDx12CopySubmitMs += elapsedMs(perfAfterResourceImport, perfAfterDx12CopySubmit);
+    _perfPresentQueueWaitMs += elapsedMs(perfAfterDx12CopySubmit, perfAfterPresentQueueWait);
+    _perfOverlayMs += elapsedMs(perfAfterPresentQueueWait, perfBeforeHiddenPresent);
+    _perfHiddenPresentMs += elapsedMs(perfBeforeHiddenPresent, perfAfterHiddenPresent);
+    _perfFgPresentMs += elapsedMs(perfAfterHiddenPresent, perfAfterFgPresent);
+    _perfTotalPresentMs += elapsedMs(perfStart, perfAfterFgPresent);
+
+    constexpr UINT64 PERF_LOG_INTERVAL = 300;
+    if (++_perfSampleCount >= PERF_LOG_INTERVAL)
+    {
+        const auto sampleCount = _perfSampleCount;
+        const auto inverseSampleCount = 1.0 / static_cast<double>(sampleCount);
+        LOG_INFO("Dx11wDx12 interop CPU averages over {} source frames [ms]: total {:.3f}, dx11 copy {:.3f}, "
+                 "dx11 flush/sync {:.3f}, RenoDX import {:.3f}, dx12 copy submit {:.3f}, present-queue wait "
+                 "submit {:.3f}, overlay {:.3f}, hidden Present {:.3f}, FG Present {:.3f}, allocator blocking "
+                 "{:.3f} ({} waits), dedicated queue {}, hidden Present {} ({} succeeded, {} would-block, {} "
+                 "provider-boundary calls)",
+                 sampleCount, _perfTotalPresentMs * inverseSampleCount, _perfDx11CopyMs * inverseSampleCount,
+                 _perfDx11SyncMs * inverseSampleCount, _perfResourceImportMs * inverseSampleCount,
+                 _perfDx12CopySubmitMs * inverseSampleCount, _perfPresentQueueWaitMs * inverseSampleCount,
+                 _perfOverlayMs * inverseSampleCount, _perfHiddenPresentMs * inverseSampleCount,
+                 _perfFgPresentMs * inverseSampleCount, _perfAllocatorWaitMs * inverseSampleCount, _perfAllocatorWaitCount,
+                 _usingDedicatedInteropQueue ? "yes" : "no",
+                 skipHiddenPresent ? "provider-aware skip" : (nonBlockingHiddenPresent ? "nonblocking" : "blocking"),
+                 _perfHiddenPresentSuccessCount, _perfHiddenPresentWouldBlockCount, _perfProviderBoundaryCount);
+
+        _perfSampleCount = 0;
+        _perfAllocatorWaitCount = 0;
+        _perfHiddenPresentWouldBlockCount = 0;
+        _perfHiddenPresentSuccessCount = 0;
+        _perfProviderBoundaryCount = 0;
+        _perfDx11CopyMs = 0.0;
+        _perfDx11SyncMs = 0.0;
+        _perfResourceImportMs = 0.0;
+        _perfDx12CopySubmitMs = 0.0;
+        _perfPresentQueueWaitMs = 0.0;
+        _perfOverlayMs = 0.0;
+        _perfHiddenPresentMs = 0.0;
+        _perfFgPresentMs = 0.0;
+        _perfTotalPresentMs = 0.0;
+        _perfAllocatorWaitMs = 0.0;
+    }
 
     return result;
 }
@@ -448,6 +553,22 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
     {
         LOG_ERROR("RenoDX Sora FG resource contract mismatch. frame {}, flags {:X}, formats {}/{} size {}x{}",
                   info.frameId, info.flags, info.hudlessFormat, info.uiFormat, info.width, info.height);
+        return false;
+    }
+
+    // Keep polling in the one-resource-disabled diagnostic state so RenoDX's
+    // producer remains active, but bypass both tags. The Sora contract is a
+    // matched HUD-less/UI pair; submitting only one would be both invalid for
+    // recomposition and would confound backend cost with producer cost.
+    if (Config::Instance()->FGDisableHudless.value_or_default() ||
+        Config::Instance()->FGDisableUI.value_or_default())
+    {
+        _lastSoraFGFrame = info.frameId;
+        if (!_soraFGInteropLogged)
+        {
+            LOG_INFO("RenoDX Sora FG producer active, but HUD-less/UI import bypassed by DisableHudless/DisableUI");
+            _soraFGInteropLogged = true;
+        }
         return false;
     }
 
@@ -953,6 +1074,33 @@ bool Dx11wDx12SC::_InitInteropObjects()
 
     HRESULT result = S_OK;
 
+    if (_interopCommandQueue == nullptr && Config::Instance()->Dx11DedicatedInteropQueue.value_or_default())
+    {
+        auto queueDesc = _dx12CommandQueue->GetDesc();
+        queueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+
+        result = _dx12Device->CreateCommandQueue(&queueDesc, IID_PPV_ARGS(&_interopCommandQueue));
+        if (SUCCEEDED(result) && _interopCommandQueue != nullptr)
+        {
+            _usingDedicatedInteropQueue = true;
+            LOG_INFO("Dx11wDx12 created dedicated interop Direct queue: {:X}; DLSSG presenting queue: {:X}",
+                     (UINT64) _interopCommandQueue, (UINT64) _dx12CommandQueue);
+        }
+        else
+            LOG_WARN("Dx11wDx12 failed to create dedicated interop queue ({:X}); falling back to DLSSG presenting "
+                     "queue",
+                     (UINT) result);
+    }
+
+    if (_interopCommandQueue == nullptr)
+    {
+        _interopCommandQueue = _dx12CommandQueue;
+        _interopCommandQueue->AddRef();
+        _usingDedicatedInteropQueue = false;
+        LOG_INFO("Dx11wDx12 interop work uses DLSSG presenting queue (dedicated queue disabled or unavailable): {:X}",
+                 (UINT64) _interopCommandQueue);
+    }
+
     const UINT copyAllocatorCount = std::max<UINT>(_bufferCount != 0 ? _bufferCount : 3, 3);
 
     if (_copyAllocators.size() != copyAllocatorCount)
@@ -1190,7 +1338,7 @@ bool Dx11wDx12SC::_CopyDx11BackBufferToShared(UINT index)
 
 bool Dx11wDx12SC::_WaitDx11ThenDx12()
 {
-    if (_dx11Context4 == nullptr || _dx11Fence == nullptr || _dx12CommandQueue == nullptr ||
+    if (_dx11Context4 == nullptr || _dx11Fence == nullptr || _interopCommandQueue == nullptr ||
         _dx12SharedFence == nullptr)
         return false;
 
@@ -1208,7 +1356,7 @@ bool Dx11wDx12SC::_WaitDx11ThenDx12()
     // Important:
     // Do not block the FG/present queue on the D3D11 shared fence.
     // Isolate the cross-API wait on the interop copy queue.
-    result = _dx12CommandQueue->Wait(_dx12SharedFence, waitValue);
+    result = _interopCommandQueue->Wait(_dx12SharedFence, waitValue);
     if (FAILED(result))
     {
         LOG_ERROR("interop copy queue Wait on D3D11 fence failed: {:X}", (UINT) result);
@@ -1246,7 +1394,11 @@ bool Dx11wDx12SC::_WaitForCopyAllocator(UINT slot)
         return false;
     }
 
+    const auto waitStart = std::chrono::steady_clock::now();
     const auto waitResult = WaitForSingleObject(_copyFenceEvent, 5000);
+    _perfAllocatorWaitMs +=
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitStart).count();
+    ++_perfAllocatorWaitCount;
     if (waitResult != WAIT_OBJECT_0)
     {
         LOG_ERROR("copy allocator fence wait failed. slot {}, fence {}, completed {}, waitResult {:X}", slot,
@@ -1259,7 +1411,7 @@ bool Dx11wDx12SC::_WaitForCopyAllocator(UINT slot)
 
 bool Dx11wDx12SC::_CopyDx11SharedToDx12FGBackBuffer(UINT dx11Index)
 {
-    if (_copyAllocators.empty() || _copyCommandLists.empty() || _dx12CommandQueue == nullptr || _copyFence == nullptr ||
+    if (_copyAllocators.empty() || _copyCommandLists.empty() || _interopCommandQueue == nullptr || _copyFence == nullptr ||
         _fgSwapChain == nullptr || _currentFakeIndex >= _openedDx11BackBuffers.size() ||
         _openedDx11BackBuffers[_currentFakeIndex] == nullptr)
     {
@@ -1327,11 +1479,11 @@ bool Dx11wDx12SC::_CopyDx11SharedToDx12FGBackBuffer(UINT dx11Index)
     }
 
     ID3D12CommandList* lists[] = { _copyCommandLists[copySlot] };
-    _dx12CommandQueue->ExecuteCommandLists(1, lists);
+    _interopCommandQueue->ExecuteCommandLists(1, lists);
 
     const auto signalValue = ++_copyFenceValue;
 
-    result = _dx12CommandQueue->Signal(_copyFence, signalValue);
+    result = _interopCommandQueue->Signal(_copyFence, signalValue);
     if (FAILED(result))
     {
         LOG_ERROR("interop copy fence signal failed: {:X}", (UINT) result);
@@ -1449,6 +1601,9 @@ void Dx11wDx12SC::_ReleaseInteropObjects()
     SafeRelease(_copyFence);
     SafeCloseHandle(_copyFenceEvent);
     _copyFenceValue = 1;
+
+    SafeRelease(_interopCommandQueue);
+    _usingDedicatedInteropQueue = false;
 
     _interopInitialized = false;
 }

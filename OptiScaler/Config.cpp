@@ -674,6 +674,14 @@ bool Config::Reload(std::filesystem::path iniPath)
         {
             Dx11DelayedInit.set_from_config(readBool("Dx11withDx12", "UseDelayedInit"));
             DontUseNTShared.set_from_config(readBool("Dx11withDx12", "DontUseNTShared"));
+            Dx11DedicatedInteropQueue.set_from_config(readBool("Dx11withDx12", "DedicatedInteropQueue"));
+            Dx11DeferFGInputSyncToPresent.set_from_config(readBool("Dx11withDx12", "DeferFGInputSyncToPresent"));
+            Dx11NonBlockingHiddenPresent.set_from_config(readBool("Dx11withDx12", "NonBlockingHiddenPresent"));
+            Dx11SkipHiddenPresent.set_from_config(readBool("Dx11withDx12", "SkipHiddenPresent"));
+            Dx11FGMaximumFrameLatency.set_from_config(readInt("Dx11withDx12", "FGMaximumFrameLatency"));
+            if (Dx11FGMaximumFrameLatency.has_value() &&
+                (Dx11FGMaximumFrameLatency.value() < 1 || Dx11FGMaximumFrameLatency.value() > 16))
+                Dx11FGMaximumFrameLatency.reset();
         }
 
         // NvApi
@@ -1430,6 +1438,16 @@ bool Config::SaveIni()
     {
         ini.SetValue("Dx11withDx12", "DontUseNTShared",
                      GetBoolValue(Instance()->DontUseNTShared.value_for_config()).c_str());
+        ini.SetValue("Dx11withDx12", "DedicatedInteropQueue",
+                     GetBoolValue(Instance()->Dx11DedicatedInteropQueue.value_for_config()).c_str());
+        ini.SetValue("Dx11withDx12", "DeferFGInputSyncToPresent",
+                     GetBoolValue(Instance()->Dx11DeferFGInputSyncToPresent.value_for_config()).c_str());
+        ini.SetValue("Dx11withDx12", "NonBlockingHiddenPresent",
+                     GetBoolValue(Instance()->Dx11NonBlockingHiddenPresent.value_for_config()).c_str());
+        ini.SetValue("Dx11withDx12", "SkipHiddenPresent",
+                     GetBoolValue(Instance()->Dx11SkipHiddenPresent.value_for_config()).c_str());
+        ini.SetValue("Dx11withDx12", "FGMaximumFrameLatency",
+                     GetIntValue(Instance()->Dx11FGMaximumFrameLatency.value_for_config()).c_str());
     }
 
     // Logging

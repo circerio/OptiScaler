@@ -120,7 +120,12 @@ class DECLSPEC_UUID("23b064bb-482d-416c-93b1-829acedfb3d0") Dx11wDx12SC final : 
     ID3D11DeviceContext4* _dx11Context4 = nullptr;
 
     ID3D12Device* _dx12Device = nullptr;
+    // The Streamline swapchain owns work submitted through _dx12CommandQueue. Keep the
+    // DX11 fence wait and bridge copy on a separate queue so preparation for the next
+    // source frame can overlap DLSSG work from the previous Present.
     ID3D12CommandQueue* _dx12CommandQueue = nullptr;
+    ID3D12CommandQueue* _interopCommandQueue = nullptr;
+    bool _usingDedicatedInteropQueue = false;
     std::vector<ID3D12CommandAllocator*> _copyAllocators;
     std::vector<ID3D12GraphicsCommandList*> _copyCommandLists;
 
@@ -151,6 +156,22 @@ class DECLSPEC_UUID("23b064bb-482d-416c-93b1-829acedfb3d0") Dx11wDx12SC final : 
     UINT _currentFakeIndex = 0;
     DXGI_FORMAT _bufferFormat = DXGI_FORMAT_UNKNOWN;
     bool _interopInitialized = false;
+
+    UINT64 _perfSampleCount = 0;
+    UINT64 _perfAllocatorWaitCount = 0;
+    UINT64 _perfHiddenPresentWouldBlockCount = 0;
+    UINT64 _perfHiddenPresentSuccessCount = 0;
+    UINT64 _perfProviderBoundaryCount = 0;
+    double _perfDx11CopyMs = 0.0;
+    double _perfDx11SyncMs = 0.0;
+    double _perfResourceImportMs = 0.0;
+    double _perfDx12CopySubmitMs = 0.0;
+    double _perfPresentQueueWaitMs = 0.0;
+    double _perfOverlayMs = 0.0;
+    double _perfHiddenPresentMs = 0.0;
+    double _perfFgPresentMs = 0.0;
+    double _perfTotalPresentMs = 0.0;
+    double _perfAllocatorWaitMs = 0.0;
 
     HWND _handle = nullptr;
 };

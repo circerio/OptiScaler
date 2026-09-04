@@ -32,6 +32,27 @@ static bool _forcedHdrForXeFG = false;
 static HANDLE _semaphore = nullptr;
 static std::optional<uint32_t> _syntheticReflexStartedFrame = std::nullopt;
 
+namespace
+{
+struct FGPresentPerfCounters
+{
+    UINT64 sampleCount = 0;
+    UINT64 mutexWaitCount = 0;
+    double totalMs = 0.0;
+    double upscalerTimingQueryMs = 0.0;
+    double mutexWaitMs = 0.0;
+    double reflexPreMs = 0.0;
+    double fgDispatchMs = 0.0;
+    double reflexBeforePresentMs = 0.0;
+    double nativePresentMs = 0.0;
+    double reflexAfterPresentMs = 0.0;
+    double frameLimitMs = 0.0;
+    double remainingMs = 0.0;
+};
+
+FGPresentPerfCounters g_fgPresentPerf;
+} // namespace
+
 static bool GetSyntheticReflexFrameToken(uint32_t frameId, sl::FrameToken*& token)
 {
     token = nullptr;
@@ -432,6 +453,7 @@ void FGHooks::HookFGSwapchain(IDXGISwapChain* pSwapChain)
     o_FGSCResizeTarget = (PFN_ResizeTarget) pFactoryVTable[14];
     o_FGSCGetFullscreenDesc = (PFN_GetFullscreenDesc) pFactoryVTable[19];
     o_FGSCPresent1 = (PFN_Present1) pFactoryVTable[22];
+    o_FGSCSetMaximumFrameLatency = (PFN_SetMaximumFrameLatency) pFactoryVTable[31];
     o_FGSCGetFrameLatencyWaitableObject = (PFN_GetFrameLatencyWaitableObject) pFactoryVTable[33];
     o_FGSCResizeBuffers1 = (PFN_ResizeBuffers1) pFactoryVTable[39];
 
@@ -446,6 +468,7 @@ void FGHooks::HookFGSwapchain(IDXGISwapChain* pSwapChain)
         LOG_TRACE("FGSCResizeTarget: {:X}", (size_t) o_FGSCResizeTarget);
         LOG_TRACE("FGSCGetFullscreenDesc: {:X}", (size_t) o_FGSCGetFullscreenDesc);
         LOG_TRACE("FGSCPresent1: {:X}", (size_t) o_FGSCPresent1);
+        LOG_TRACE("FGSCSetMaximumFrameLatency: {:X}", (size_t) o_FGSCSetMaximumFrameLatency);
         LOG_TRACE("FGSCResizeBuffers1: {:X}", (size_t) o_FGSCResizeBuffers1);
         LOG_TRACE("FGSCGetFrameLatencyWaitableObject: {:X}", (size_t) o_FGSCGetFrameLatencyWaitableObject);
 
@@ -463,6 +486,9 @@ void FGHooks::HookFGSwapchain(IDXGISwapChain* pSwapChain)
 
         if (o_FGSCResizeBuffers1 != nullptr)
             DetourAttach(&(PVOID&) o_FGSCResizeBuffers1, hkResizeBuffers1);
+
+        if (o_FGSCSetMaximumFrameLatency != nullptr)
+            DetourAttach(&(PVOID&) o_FGSCSetMaximumFrameLatency, hkSetMaximumFrameLatency);
 
         if (State::Instance().activeFgOutput == FGOutput::XeFG)
         {
@@ -494,6 +520,7 @@ void FGHooks::HookFGSwapchain(IDXGISwapChain* pSwapChain)
             o_FGSCGetFullscreenDesc = nullptr;
             o_FGSCPresent1 = nullptr;
             o_FGSCResizeBuffers1 = nullptr;
+            o_FGSCSetMaximumFrameLatency = nullptr;
             o_FGSCGetFrameLatencyWaitableObject = nullptr;
         }
     }
@@ -607,6 +634,31 @@ HANDLE FGHooks::hkGetFrameLatencyWaitableObject(IDXGISwapChain2* This)
     }
 
     return duplicatedHandle;
+}
+
+HRESULT FGHooks::hkSetMaximumFrameLatency(IDXGISwapChain2* This, UINT MaxLatency)
+{
+    UINT appliedLatency = MaxLatency;
+    auto config = Config::Instance();
+    auto& state = State::Instance();
+
+    HWND swapchainHwnd = nullptr;
+    const bool isVisibleFGSwapchain = SUCCEEDED(This->GetHwnd(&swapchainHwnd)) && swapchainHwnd == _hwnd;
+    if (isVisibleFGSwapchain && state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12 &&
+        state.activeFgOutput == FGOutput::DLSSG && config->Dx11FGMaximumFrameLatency.has_value())
+    {
+        appliedLatency = static_cast<UINT>(config->Dx11FGMaximumFrameLatency.value());
+
+        static std::atomic<UINT64> overrideCount = 0;
+        const auto count = ++overrideCount;
+        if (count == 1 || count % 300 == 0)
+        {
+            LOG_INFO("DX11 DLSSG maximum frame latency override: requested {}, applied {} ({} calls)", MaxLatency,
+                     appliedLatency, count);
+        }
+    }
+
+    return o_FGSCSetMaximumFrameLatency(This, appliedLatency);
 }
 
 HRESULT FGHooks::hkGetFullscreenDesc(IDXGISwapChain1* This, DXGI_SWAP_CHAIN_FULLSCREEN_DESC* pDesc)
@@ -1161,6 +1213,7 @@ HRESULT FGHooks::hkFGPresent1(IDXGISwapChain1* This, UINT SyncInterval, UINT Fla
 HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
                            const DXGI_PRESENT_PARAMETERS* pPresentParameters)
 {
+    const auto perfStart = Util::MillisecondsNow();
     _lastPresentFlags = Flags;
 
     auto& state = State::Instance();
@@ -1239,6 +1292,8 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         }
     }
 
+    const auto perfAfterUpscalerTimingQuery = Util::MillisecondsNow();
+
     bool mutexUsed = false;
     if (willPresent && fg != nullptr && fg->IsActive() && !fg->IsPaused() &&
         config->FGUseMutexForSwapchain.value_or_default() && fg->Mutex.getOwner() != 2)
@@ -1248,6 +1303,8 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         mutexUsed = true;
         LOG_TRACE("Accuired FG->Mutex: {}", fg->Mutex.getOwner());
     }
+
+    const auto perfAfterMutexWait = Util::MillisecondsNow();
 
     const bool fgFeatureActive = fg != nullptr && fg->IsActive() && !fg->IsPaused();
 
@@ -1276,6 +1333,8 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         }
     }
 
+    const auto perfAfterReflexPre = Util::MillisecondsNow();
+
     if (willPresent && fgFeatureActive)
     {
         if (state.activeFgInput == FGInput::FSRFG)
@@ -1290,11 +1349,15 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         LOG_TRACE("FGHooks::FGPresent: FG feature exists but is inactive/paused; pass-through present only");
     }
 
+    const auto perfAfterFgDispatch = Util::MillisecondsNow();
+
     if (useSyntheticReflex && tokenResult == sl::Result::eOk && localToken != nullptr)
     {
         SetSyntheticReflexMarker(sl::PCLMarker::eRenderSubmitEnd, localToken);
         SetSyntheticReflexMarker(sl::PCLMarker::ePresentStart, localToken);
     }
+
+    const auto perfAfterReflexBeforePresent = Util::MillisecondsNow();
 
     if (willPresent && state.swapchainInteropApi == SwapchainInteropApi::None)
     {
@@ -1342,6 +1405,8 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     else
         result = o_FGSCPresent1((IDXGISwapChain1*) This, SyncInterval, Flags, pPresentParameters);
 
+    const auto perfAfterNativePresent = Util::MillisecondsNow();
+
     if (result == S_OK)
     {
         LOG_DEBUG("Result: {:X}", result);
@@ -1362,6 +1427,8 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
             StartSyntheticReflexFrame(syntheticReflexFrameId + 1);
     }
 
+    const auto perfAfterReflexAfterPresent = Util::MillisecondsNow();
+
     if (state.swapchainInteropApi == SwapchainInteropApi::None)
         Hudfix_Dx12::PresentEnd();
 
@@ -1370,6 +1437,8 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     {
         FrameLimit::sleep(fg != nullptr ? fg->IsActive() && !fg->IsPaused() : false);
     }
+
+    const auto perfAfterFrameLimit = Util::MillisecondsNow();
 
     if ((config->SimulateWaitableObject.value_or_default() ||
          (state.gameEngine == GameEngineType::Unity && state.activeFgOutput == FGOutput::XeFG)) &&
@@ -1382,6 +1451,44 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     {
         LOG_TRACE("Releasing FG->Mutex: {}", fg->Mutex.getOwner());
         fg->Mutex.unlockThis(2);
+    }
+
+    const auto perfEnd = Util::MillisecondsNow();
+    if (willPresent && fgFeatureActive)
+    {
+        auto& perf = g_fgPresentPerf;
+        ++perf.sampleCount;
+        if (mutexUsed)
+            ++perf.mutexWaitCount;
+
+        perf.totalMs += perfEnd - perfStart;
+        perf.upscalerTimingQueryMs += perfAfterUpscalerTimingQuery - perfStart;
+        perf.mutexWaitMs += perfAfterMutexWait - perfAfterUpscalerTimingQuery;
+        perf.reflexPreMs += perfAfterReflexPre - perfAfterMutexWait;
+        perf.fgDispatchMs += perfAfterFgDispatch - perfAfterReflexPre;
+        perf.reflexBeforePresentMs += perfAfterReflexBeforePresent - perfAfterFgDispatch;
+        perf.nativePresentMs += perfAfterNativePresent - perfAfterReflexBeforePresent;
+        perf.reflexAfterPresentMs += perfAfterReflexAfterPresent - perfAfterNativePresent;
+        perf.frameLimitMs += perfAfterFrameLimit - perfAfterReflexAfterPresent;
+        perf.remainingMs += perfEnd - perfAfterFrameLimit;
+
+        constexpr UINT64 PERF_LOG_INTERVAL = 300;
+        if (perf.sampleCount >= PERF_LOG_INTERVAL)
+        {
+            const auto inverseSampleCount = 1.0 / static_cast<double>(perf.sampleCount);
+            LOG_INFO("FG hook CPU averages over {} source frames [ms]: total {:.3f}, upscaler timing query {:.3f}, "
+                     "mutex wait {:.3f} ({} used), Reflex pre {:.3f}, DLSSG dispatch {:.3f}, Reflex before Present "
+                     "{:.3f}, native/Streamline Present {:.3f}, Reflex after Present {:.3f}, frame limiter {:.3f}, "
+                     "remaining {:.3f}",
+                     perf.sampleCount, perf.totalMs * inverseSampleCount,
+                     perf.upscalerTimingQueryMs * inverseSampleCount, perf.mutexWaitMs * inverseSampleCount,
+                     perf.mutexWaitCount, perf.reflexPreMs * inverseSampleCount, perf.fgDispatchMs * inverseSampleCount,
+                     perf.reflexBeforePresentMs * inverseSampleCount, perf.nativePresentMs * inverseSampleCount,
+                     perf.reflexAfterPresentMs * inverseSampleCount, perf.frameLimitMs * inverseSampleCount,
+                     perf.remainingMs * inverseSampleCount);
+
+            perf = {};
+        }
     }
 
     LOG_DEBUG("Present finished");

@@ -46,7 +46,7 @@ OptiScaler branch 刻意保留為 PoC commit series，目前仍有實驗歷史�
 
 RenoDX 的 HDR-critical resources 維持 `DXGI_FORMAT_R16G16B16A16_FLOAT`。Runtime resource-upgrade log 顯示，相關全解析度資源由 `R11G11B10_FLOAT` 升級為 `R16G16B16A16_FLOAT`。
 
-遊戲專用 FG 修改沒有取代可見 RGB 的 tone mapping、grading、bloom、TAA、lighting 或 Falcom Engine+ processing。可見 pipeline shader 唯一變更是為 UI coverage capture 初始化 alpha；RGB 未改。
+遊戲專用 FG 修改沒有取代可見 RGB 的 tone mapping、grading、bloom、TAA、lighting 或 Falcom Engine+ processing。Scene 與 final shader 增加額外 MRT 輸出，但可見的 `SV_Target0` 運算保持等價；RGB 未改。
 
 ### 最終 representation
 
@@ -67,10 +67,12 @@ RenoDX 的 HDR-critical resources 維持 `DXGI_FORMAT_R16G16B16A16_FLOAT`。Runt
 
 RenoDX provider 維持四個 slots，每個 slot 包含：
 
-1. FP16 HUD-less linear scene capture。
-2. Final HDR10 PQ copy。
-3. Shared HDR10 PQ HUD-less texture。
-4. Shared RGBA16F premultiplied UI texture。
+1. FP16 HUD-less linear scene render target／SRV。
+2. Shared HDR10 PQ HUD-less texture。
+3. Shared RGBA16F premultiplied UI texture。
+4. 為相容性 fallback 保留的 local final HDR10 PQ resource。
+
+目前 active path 將兩組 export 融合進 renderer 原本就存在的 pass。Pre-HUD FP16 scene pass 以第二個 MRT 寫入 HUD-less slot，略過舊的 4K RGBA16F `CopyResource`；final pass 同時寫出 visible Final、HDR10 HUD-less 與 FP16 UI。UI coverage 恰為零的 pixel 會直接沿用已編碼的 Final 作為 HUD-less；任何非零 alpha 都仍執行完整高精度 HUD-less encode 與 UI 計算。若 MRT precondition 不成立，原本的 copy 加兩次 draw producer 仍可作為 fallback。
 
 Provider 透過 `RenoDX_GetSoraFGResourcesV1` 匯出有版本的 structure。OptiScaler 在 D3D12 device 開啟 shared handles，驗證尺寸、format 與 flags，並標記同一 frame 的 resources。第五組新 handle 會被視為 provider resource recreation，並重置已開啟的 resource set。
 
@@ -121,7 +123,7 @@ Final build 已在以下環境完成 3840 x 2160、240 Hz HDR runtime validation
 - MSI MPG322UX OLED，RGB 10 bits per color channel
 - 最新 log session 使用 DLSSG 2x
 
-迭代測試期間，使用者目視確認 color、HUD、操作手感、移動、選單與戰鬥正常。較早版本也測過 DLSSG 4x；關閉 V-Sync 後 presentation uniformity 大幅改善，但 4x 目前仍屬 experimental。
+迭代測試期間，使用者目視確認 color、HDR highlight、HUD 外觀與轉場、操作手感、移動、選單與戰鬥正常。最終 resource-lifetime 修正後也重新驗證 ReShade Home。DLSSG 2x、3x、4x 的實際 present ratio 均已量測；關閉 V-Sync 後 presentation uniformity 大幅改善，但 4x 目前仍屬 experimental。
 
 Final HDR/UI build 尚未完成長時間 soak test。Host system 另有與本模組無法歸因的穩定性問題，因此不宣稱已證明 crash stability。
 
@@ -145,6 +147,13 @@ UseGamesReflexMarkers = false
 [OptiFG]
 UseDx11UpscalerOutputAsHudless = false
 Dx11ResourcesValidUntilPresent = true
+DisableHUDFix = true
+
+[Dx11withDx12]
+DeferFGInputSyncToPresent = true
+DedicatedInteropQueue = true
+NonBlockingHiddenPresent = false
+SkipHiddenPresent = false
 
 [Framerate]
 FramerateLimit = 0
@@ -178,13 +187,26 @@ Final HDR path 刻意關閉舊的 generic DX11 upscaler-output HUD-less 選項�
 
 ### 原始碼建置驗證
 
-兩個公開原始碼分支在整理公開歷史後，已於 2026-09-03 重新完成 `Release | x64` 建置：
+兩個公開原始碼分支在完成 provider 成本與 resource-lifetime 工作後，已於 2026-09-05 重新完成 `Release | x64` 建置：
 
-- OptiScaler 產出 `OptiScaler.dll`（SHA-256 `3ED14AAE33445644BE278B42674D793412F6CF15F60BB06F5E10D25948BF5196`）。
-- RenoDX `falcomengine` target 產出 `renodx-falcomengine.addon64`（SHA-256 `DDAE46F88B0DD94E1C3FFC8D80AEA20D9192CA4D4B09D16BF22D6BD347B702DC`）。
+- OptiScaler 產出 `OptiScaler.dll`（SHA-256 `CEA9797A13E3A1D8C785572B1E15E8AD0DE6698564B632743D1967DA52DA38A4`）。
+- RenoDX `falcomengine` target 產出 `renodx-falcomengine.addon64`（SHA-256 `6E2EE9CCABE0F693CEFFC4B312BE886C0D215288719B262CADC96C177DDDCD0D`）。
 - `dumpbin /exports` 已確認重新建置的 RenoDX add-on 包含 `RenoDX_GetSoraFGResourcesV1`。
 
 這些雜湊只記錄本機建置驗證；binary 不會 commit 或散布。
+
+### Frame Generation 成本
+
+乾淨的 PresentMon 2.3.1 擷取使用獨立 session 與 `--terminate_after_timed`。以最佳化後的高畫質 provider，在相同測試場景配對量測得到：
+
+| 模式 | Source frame time | Source FPS | Output FPS | 相對 FG OFF 成本 |
+|---|---:|---:|---:|---:|
+| FG OFF | 17.7802 ms | 56.24 | 56.23 | — |
+| 2x | 19.9407 ms | 50.15 | 100.32 | +2.1606 ms |
+| 3x | 21.3271 ms | 46.89 | 140.74 | +3.5469 ms |
+| 4x | 23.0007 ms | 43.48 | 173.98 | +5.2205 ms |
+
+原始高畫質 RenoDX producer 約耗費 0.58–0.64 ms／source frame。將 FP16 scene capture 與 HDR10／UI export 融合至既有 renderer pass 後，量測到的 2x source time 降低 0.3887 ms（1.95%），剩餘遊戲專用 provider 成本約 0.19 ms；Opti import CPU time 約 0.009 ms。其餘隨 multiplier 增長的成本主要來自 DLSSG／MFG inference 與 presenter back-pressure，不是 generic tracking 或額外 copy path。
 
 ## 已知限制與後續驗證
 
@@ -195,7 +217,7 @@ Final HDR path 刻意關閉舊的 generic DX11 upscaler-output HUD-less 選項�
 - SDR presentation 與沒有 RenoDX provider 時的 fallback 尚需獨立驗證。
 - Provider ABI 與 OptiScaler import path 目前硬編碼給此遊戲。
 - 送 upstream 前需針對 upscaler/DLSSG lifecycle reset 與 resource transition 做測試。
-- 尚未以專門儀器量測 performance cost 與 click-to-photon latency。
+- 已以 PresentMon 與針對性 internal timing 量測 performance cost 與 present pacing；端到端 click-to-photon latency 仍需獨立硬體儀器。
 - 一般 SDR capture 工具取得的 HDR screenshot 不能作為 HDR luminance 或 color accuracy 證據。
 
 ## Upstreaming 建議
