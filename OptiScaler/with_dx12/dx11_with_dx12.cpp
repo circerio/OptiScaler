@@ -3,6 +3,195 @@
 #include "dx11_with_dx12.h"
 #include "with_dx12.h"
 
+namespace
+{
+constexpr UINT SORA_FG_MV_INTEROP_VERSION = 1;
+constexpr UINT SORA_FG_MV_INTEROP_VERSION_V2 = 2;
+constexpr UINT SORA_FG_MV_FLAG_RENDER_TARGET = 1u << 0;
+constexpr UINT SORA_FG_DEPTH_INTEROP_VERSION = 1;
+constexpr UINT SORA_FG_DEPTH_FLAG_DEPTH_STENCIL = 1u << 0;
+
+struct SoraFGMotionVectorTargetV1
+{
+    UINT structSize;
+    UINT version;
+    UINT64 frameId;
+    UINT width;
+    UINT height;
+    UINT format;
+    UINT bindFlags;
+    UINT flags;
+    float rawScaleX;
+    float rawScaleY;
+    ID3D11Texture2D* texture;
+};
+
+struct SoraFGMotionVectorTargetV2
+{
+    UINT structSize;
+    UINT version;
+    UINT64 frameId;
+    UINT width;
+    UINT height;
+    UINT format;
+    UINT bindFlags;
+    UINT flags;
+    float rawScaleX;
+    float rawScaleY;
+    ID3D11Texture2D* texture;
+    ID3D11DeviceContext* context;
+};
+
+struct SoraFGDepthTargetV1
+{
+    UINT structSize;
+    UINT version;
+    UINT64 frameId;
+    UINT width;
+    UINT height;
+    UINT format;
+    UINT bindFlags;
+    UINT flags;
+    ID3D11Texture2D* texture;
+};
+} // namespace
+
+// Read-only ABI discovery plus an AddRef'd pointer to OptiScaler's persistent
+// D3D11 copy. RenoDX writes its game-specific late-overlay MV before the
+// already-existing Present fence makes this same allocation visible to DLSSG.
+extern "C" __declspec(dllexport) BOOL OptiScaler_GetSoraFGMotionVectorTargetV1(
+    SoraFGMotionVectorTargetV1* output)
+{
+    if (output == nullptr || output->structSize < sizeof(SoraFGMotionVectorTargetV1))
+        return FALSE;
+
+    auto& cache = Dx11WithDx12::GetUpscalerResourceCache();
+    float scaleX = 0.0f;
+    float scaleY = 0.0f;
+    UINT64 scaleFrame = 0;
+    if (cache.Mv.SharedTexture == nullptr || cache.Mv.LastPreparedFrame == 0 || !cache.Mv.LastPreparedCopy ||
+        !Dx11WithDx12::GetSoraFGMotionVectorScale(&scaleX, &scaleY, &scaleFrame) ||
+        scaleFrame != cache.Mv.LastPreparedFrame || scaleX == 0.0f || scaleY == 0.0f)
+    {
+        return FALSE;
+    }
+
+    D3D11_TEXTURE2D_DESC desc {};
+    cache.Mv.SharedTexture->GetDesc(&desc);
+    if (desc.Width == 0 || desc.Height == 0 || desc.SampleDesc.Count != 1 ||
+        (desc.BindFlags & D3D11_BIND_RENDER_TARGET) == 0)
+    {
+        return FALSE;
+    }
+
+    SoraFGMotionVectorTargetV1 result {};
+    result.structSize = sizeof(result);
+    result.version = SORA_FG_MV_INTEROP_VERSION;
+    result.frameId = cache.Mv.LastPreparedFrame;
+    result.width = desc.Width;
+    result.height = desc.Height;
+    result.format = desc.Format;
+    result.bindFlags = desc.BindFlags;
+    result.flags = SORA_FG_MV_FLAG_RENDER_TARGET;
+    result.rawScaleX = scaleX;
+    result.rawScaleY = scaleY;
+    result.texture = cache.Mv.SharedTexture;
+    result.texture->AddRef();
+    *output = result;
+    return TRUE;
+}
+
+// V2 additionally returns the exact D3D11 context that owns the persistent
+// bridge texture. ReShade add-ons may expose the native context while the NGX
+// hook sees its proxy interface, so raw COM interface identity is not a safe
+// way for a consumer to recover this matching context on its own.
+extern "C" __declspec(dllexport) BOOL OptiScaler_GetSoraFGMotionVectorTargetV2(
+    SoraFGMotionVectorTargetV2* output)
+{
+    if (output == nullptr || output->structSize < sizeof(SoraFGMotionVectorTargetV2))
+        return FALSE;
+
+    auto& cache = Dx11WithDx12::GetUpscalerResourceCache();
+    auto* context = Dx11WithDx12::GetD3D11DeviceContext();
+    float scaleX = 0.0f;
+    float scaleY = 0.0f;
+    UINT64 scaleFrame = 0;
+    if (cache.Mv.SharedTexture == nullptr || context == nullptr || cache.Mv.LastPreparedFrame == 0 ||
+        !cache.Mv.LastPreparedCopy ||
+        !Dx11WithDx12::GetSoraFGMotionVectorScale(&scaleX, &scaleY, &scaleFrame) ||
+        scaleFrame != cache.Mv.LastPreparedFrame || scaleX == 0.0f || scaleY == 0.0f)
+    {
+        return FALSE;
+    }
+
+    D3D11_TEXTURE2D_DESC desc {};
+    cache.Mv.SharedTexture->GetDesc(&desc);
+    if (desc.Width == 0 || desc.Height == 0 || desc.SampleDesc.Count != 1 ||
+        (desc.BindFlags & D3D11_BIND_RENDER_TARGET) == 0)
+    {
+        return FALSE;
+    }
+
+    SoraFGMotionVectorTargetV2 result {};
+    result.structSize = sizeof(result);
+    result.version = SORA_FG_MV_INTEROP_VERSION_V2;
+    result.frameId = cache.Mv.LastPreparedFrame;
+    result.width = desc.Width;
+    result.height = desc.Height;
+    result.format = desc.Format;
+    result.bindFlags = desc.BindFlags;
+    result.flags = SORA_FG_MV_FLAG_RENDER_TARGET;
+    result.rawScaleX = scaleX;
+    result.rawScaleY = scaleY;
+    result.texture = cache.Mv.SharedTexture;
+    result.context = context;
+    result.texture->AddRef();
+    result.context->AddRef();
+    *output = result;
+    return TRUE;
+}
+
+// Read-only ABI discovery plus an AddRef'd pointer to the persistent D3D11
+// depth copy consumed by FG. A game-specific late-overlay integration may add
+// matching depth after the upscaler input copy and before the final Present
+// fence, without touching the game's own depth buffer or DLSS SR inputs.
+extern "C" __declspec(dllexport) BOOL OptiScaler_GetSoraFGDepthTargetV1(
+    SoraFGDepthTargetV1* output)
+{
+    if (output == nullptr || output->structSize < sizeof(SoraFGDepthTargetV1))
+        return FALSE;
+
+    auto& cache = Dx11WithDx12::GetUpscalerResourceCache();
+    if (cache.Depth.SharedTexture == nullptr || cache.Depth.LastPreparedFrame == 0 ||
+        !cache.Depth.LastPreparedCopy || !cache.Depth.LastPreparedDepth ||
+        cache.Depth.LastPreparedFrame != cache.Mv.LastPreparedFrame)
+    {
+        return FALSE;
+    }
+
+    D3D11_TEXTURE2D_DESC desc {};
+    cache.Depth.SharedTexture->GetDesc(&desc);
+    if (desc.Width == 0 || desc.Height == 0 || desc.SampleDesc.Count != 1 ||
+        (desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) == 0)
+    {
+        return FALSE;
+    }
+
+    SoraFGDepthTargetV1 result {};
+    result.structSize = sizeof(result);
+    result.version = SORA_FG_DEPTH_INTEROP_VERSION;
+    result.frameId = cache.Depth.LastPreparedFrame;
+    result.width = desc.Width;
+    result.height = desc.Height;
+    result.format = desc.Format;
+    result.bindFlags = desc.BindFlags;
+    result.flags = SORA_FG_DEPTH_FLAG_DEPTH_STENCIL;
+    result.texture = cache.Depth.SharedTexture;
+    result.texture->AddRef();
+    *output = result;
+    return TRUE;
+}
+
 #define ASSIGN_DESC(dest, src)                                                                                         \
     dest.Width = src.Width;                                                                                            \
     dest.Height = src.Height;                                                                                          \
@@ -62,6 +251,24 @@ void Dx11WithDx12::ResetUpscalerFrameId() { UpscalerLocalFrameId = 0; }
 UINT64 Dx11WithDx12::GetLastPreparedUpscalerFrameId() { return LastPreparedUpscalerFrameId; }
 
 Dx11WithDx12::ResourceMask Dx11WithDx12::GetLastPreparedUpscalerMask() { return LastPreparedUpscalerMask; }
+
+void Dx11WithDx12::SetSoraFGMotionVectorScale(float x, float y, UINT64 frameId)
+{
+    SoraFGMotionVectorScaleX = x;
+    SoraFGMotionVectorScaleY = y;
+    SoraFGMotionVectorScaleFrameId = frameId;
+}
+
+bool Dx11WithDx12::GetSoraFGMotionVectorScale(float* x, float* y, UINT64* frameId)
+{
+    if (x == nullptr || y == nullptr || frameId == nullptr || SoraFGMotionVectorScaleFrameId == 0)
+        return false;
+
+    *x = SoraFGMotionVectorScaleX;
+    *y = SoraFGMotionVectorScaleY;
+    *frameId = SoraFGMotionVectorScaleFrameId;
+    return true;
+}
 
 void Dx11WithDx12::ClearLastPreparedUpscalerFrameState()
 {
@@ -280,6 +487,9 @@ void Dx11WithDx12::ResetUpscalerResourceCache(bool releaseSyncResources)
     }
 
     ClearLastPreparedUpscalerFrameState();
+    SoraFGMotionVectorScaleX = 0.0f;
+    SoraFGMotionVectorScaleY = 0.0f;
+    SoraFGMotionVectorScaleFrameId = 0;
 
     if (releaseSyncResources)
         ReleaseSyncResources();

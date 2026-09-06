@@ -237,6 +237,12 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             FGDLSSGUseGamesReflexMarkers.set_from_config(readBool("DLSSG", "UseGamesReflexMarkers"));
 
+            FGDLSSGSoraUIExperimentMode.set_from_config(readInt("DLSSG", "SoraUIExperimentMode"));
+            if (FGDLSSGSoraUIExperimentMode.has_value() &&
+                (FGDLSSGSoraUIExperimentMode.value() < -1 || FGDLSSGSoraUIExperimentMode.value() > 10))
+                FGDLSSGSoraUIExperimentMode.reset();
+            FGDLSSGSoraUIFrameDiagnostics.set_from_config(readBool("DLSSG", "SoraUIFrameDiagnostics"));
+
             FGDLSSGOverrideInterpolationCount.set_from_config(readInt("DLSSG", "OverrideInterpolationCount"));
             if (FGDLSSGOverrideInterpolationCount.has_value() &&
                 (FGDLSSGOverrideInterpolationCount.value() < 0 || FGDLSSGOverrideInterpolationCount.value() > 6))
@@ -1023,6 +1029,10 @@ bool Config::SaveIni()
                      GetIntValue(Instance()->FGDLSSGInterpolationCount.value_for_config()).c_str());
         ini.SetValue("DLSSG", "UseGamesReflexMarkers",
                      GetBoolValue(Instance()->FGDLSSGUseGamesReflexMarkers.value_for_config()).c_str());
+        ini.SetValue("DLSSG", "SoraUIExperimentMode",
+                     GetIntValue(Instance()->FGDLSSGSoraUIExperimentMode.value_for_config()).c_str());
+        ini.SetValue("DLSSG", "SoraUIFrameDiagnostics",
+                     GetBoolValue(Instance()->FGDLSSGSoraUIFrameDiagnostics.value_for_config()).c_str());
         ini.SetValue("DLSSG", "OverrideInterpolationCount",
                      GetIntValue(Instance()->FGDLSSGOverrideInterpolationCount.value_for_config()).c_str());
         ini.SetValue("DLSSG", "FramerateTargetDMFG",

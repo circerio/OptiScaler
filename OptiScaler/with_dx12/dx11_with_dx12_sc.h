@@ -150,6 +150,15 @@ class DECLSPEC_UUID("23b064bb-482d-416c-93b1-829acedfb3d0") Dx11wDx12SC final : 
 
     std::array<SoraFGOpenedResources, 4> _soraFGResources {};
     uint64_t _lastSoraFGFrame = 0;
+    uint64_t _lastSoraFGApplicationFrame = 0;
+    uint64_t _lastSoraFGReplayFrame = 0;
+    uint64_t _lastSoraFGFinalResourceIdentity = 0;
+    uint64_t _lastSoraFGHudlessResourceIdentity = 0;
+    uint64_t _lastSoraFGUIResourceIdentity = 0;
+    uint64_t _lastSoraFGOpenedHudlessIdentity = 0;
+    uint64_t _lastSoraFGOpenedUIIdentity = 0;
+    uint32_t _lastSoraFGReplayDrawCount = 0;
+    int32_t _lastSoraFGExperimentMode = -1;
     bool _soraFGInteropLogged = false;
 
     UINT _bufferCount = 0;

@@ -279,6 +279,9 @@ void UpscalerInputsDx11wDx12::UpscaleStart(NVSDK_NGX_Parameter* InParameters, IF
     InParameters->Get(NVSDK_NGX_Parameter_Jitter_Offset_X, &jitterX);
     InParameters->Get(NVSDK_NGX_Parameter_Jitter_Offset_Y, &jitterY);
 
+    Dx11WithDx12::SetSoraFGMotionVectorScale(
+        mvScaleX, mvScaleY, Dx11WithDx12::GetLastPreparedUpscalerFrameId());
+
     fg->StartNewFrame();
 
     auto aspectRatio = (float) feature->DisplayWidth() / (float) feature->DisplayHeight();

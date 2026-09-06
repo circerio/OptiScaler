@@ -83,12 +83,13 @@ DXGI_FORMAT ResolveBufferFormat(IDXGISwapChain* swapchain, IDXGISwapChain1* swap
     return DXGI_FORMAT_UNKNOWN;
 }
 
-constexpr uint32_t SORA_FG_INTEROP_VERSION = 1;
+constexpr uint32_t SORA_FG_INTEROP_VERSION = 2;
 constexpr uint32_t SORA_FG_FLAG_HUDLESS = 1u << 0;
 constexpr uint32_t SORA_FG_FLAG_UI = 1u << 1;
 constexpr uint32_t SORA_FG_FLAG_HDR10_PQ_BT2020 = 1u << 2;
 constexpr uint32_t SORA_FG_FLAG_UI_PREMULTIPLIED = 1u << 3;
 constexpr uint32_t SORA_FG_FLAG_UI_FP16 = 1u << 4;
+constexpr uint32_t SORA_FG_FLAG_UI_ALPHA_ONLY = 1u << 5;
 
 struct SoraFGInteropResourcesV1
 {
@@ -103,9 +104,17 @@ struct SoraFGInteropResourcesV1
     uint32_t reserved;
     HANDLE hudlessHandle;
     HANDLE uiHandle;
+    uint64_t applicationFrameId;
+    uint64_t replayFrameId;
+    uint64_t finalResourceIdentity;
+    uint64_t hudlessResourceIdentity;
+    uint64_t uiResourceIdentity;
+    uint32_t replayDrawCount;
+    int32_t experimentMode;
 };
 
 using PFN_RenoDX_GetSoraFGResourcesV1 = BOOL (*)(SoraFGInteropResourcesV1* output);
+using PFN_RenoDX_SetSoraFGUIExperimentModeV1 = BOOL (*)(int32_t mode);
 using PFN_RenoDX_NotifySoraFGFrameBoundaryV1 = BOOL (*)();
 using PFN_RenoDX_NotifyFalcomEnginePlusFrameBoundaryV1 = BOOL (*)();
 } // namespace
@@ -535,6 +544,15 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
     if (getResources == nullptr)
         return false;
 
+    const auto experimentMode = Config::Instance()->FGDLSSGSoraUIExperimentMode.value_or_default();
+    const auto setExperimentMode = reinterpret_cast<PFN_RenoDX_SetSoraFGUIExperimentModeV1>(
+        GetProcAddress(module, "RenoDX_SetSoraFGUIExperimentModeV1"));
+    if (setExperimentMode == nullptr || !setExperimentMode(experimentMode))
+    {
+        LOG_ERROR("RenoDX Sora FG experiment control ABI is unavailable or rejected mode {}", experimentMode);
+        return false;
+    }
+
     SoraFGInteropResourcesV1 info {};
     info.structSize = sizeof(info);
     if (!getResources(&info) || info.version != SORA_FG_INTEROP_VERSION || info.frameId == 0 ||
@@ -543,16 +561,21 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
         return false;
     }
 
-    constexpr uint32_t requiredFlags = SORA_FG_FLAG_HUDLESS | SORA_FG_FLAG_UI |
-                                       SORA_FG_FLAG_HDR10_PQ_BT2020 | SORA_FG_FLAG_UI_PREMULTIPLIED |
-                                       SORA_FG_FLAG_UI_FP16;
+    const uint32_t requiredUiFlag = experimentMode >= 2 ? SORA_FG_FLAG_UI_PREMULTIPLIED
+                                                        : SORA_FG_FLAG_UI_ALPHA_ONLY;
+    const DXGI_FORMAT expectedUiFormat = experimentMode >= 2 ? DXGI_FORMAT_R16G16B16A16_FLOAT
+                                                              : DXGI_FORMAT_R16_FLOAT;
+    const uint32_t requiredFlags = SORA_FG_FLAG_HUDLESS | SORA_FG_FLAG_UI |
+                                   SORA_FG_FLAG_HDR10_PQ_BT2020 | SORA_FG_FLAG_UI_FP16 | requiredUiFlag;
     if ((info.flags & requiredFlags) != requiredFlags || info.hudlessHandle == nullptr || info.uiHandle == nullptr ||
         info.hudlessFormat != DXGI_FORMAT_R10G10B10A2_UNORM ||
-        info.uiFormat != DXGI_FORMAT_R16G16B16A16_FLOAT || info.width == 0 || info.height == 0 ||
+        info.uiFormat != expectedUiFormat || info.width == 0 || info.height == 0 ||
+        info.experimentMode != experimentMode ||
         _bufferFormat != DXGI_FORMAT_R10G10B10A2_UNORM)
     {
-        LOG_ERROR("RenoDX Sora FG resource contract mismatch. frame {}, flags {:X}, formats {}/{} size {}x{}",
-                  info.frameId, info.flags, info.hudlessFormat, info.uiFormat, info.width, info.height);
+        LOG_ERROR("RenoDX Sora FG resource contract mismatch. frame {}, mode {}/{}, flags {:X}, formats {}/{} size {}x{}",
+                  info.frameId, info.experimentMode, experimentMode, info.flags, info.hudlessFormat, info.uiFormat,
+                  info.width, info.height);
         return false;
     }
 
@@ -628,7 +651,7 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
         const auto uiDesc = opened->ui->GetDesc();
         if (hudlessDesc.Width != info.width || hudlessDesc.Height != info.height ||
             hudlessDesc.Format != DXGI_FORMAT_R10G10B10A2_UNORM || uiDesc.Width != info.width ||
-            uiDesc.Height != info.height || uiDesc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
+            uiDesc.Height != info.height || uiDesc.Format != expectedUiFormat)
         {
             LOG_ERROR("Opened RenoDX Sora FG resource descriptions do not match the export contract");
             SafeRelease(opened->hudless);
@@ -668,11 +691,21 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
         return false;
     }
 
+    _lastSoraFGApplicationFrame = info.applicationFrameId;
+    _lastSoraFGReplayFrame = info.replayFrameId;
+    _lastSoraFGFinalResourceIdentity = info.finalResourceIdentity;
+    _lastSoraFGHudlessResourceIdentity = info.hudlessResourceIdentity;
+    _lastSoraFGUIResourceIdentity = info.uiResourceIdentity;
+    _lastSoraFGOpenedHudlessIdentity = reinterpret_cast<uint64_t>(opened->hudless);
+    _lastSoraFGOpenedUIIdentity = reinterpret_cast<uint64_t>(opened->ui);
+    _lastSoraFGReplayDrawCount = info.replayDrawCount;
+    _lastSoraFGExperimentMode = info.experimentMode;
     _lastSoraFGFrame = info.frameId;
     if (!_soraFGInteropLogged)
     {
-        LOG_INFO("RenoDX Sora FG interop active: HUD-less R10 PQ/BT.2020 + premultiplied UI RGBA16F, {}x{}",
-                 info.width, info.height);
+        LOG_INFO("RenoDX Sora FG interop active: HUD-less R10 PQ/BT.2020 + {} (format {}), {}x{}, experiment mode {}",
+                 experimentMode >= 2 ? "premultiplied UI RGBA16F" : "UI alpha R16F", info.uiFormat, info.width,
+                 info.height, experimentMode);
         _soraFGInteropLogged = true;
     }
     return true;
@@ -688,6 +721,15 @@ void Dx11wDx12SC::_ReleaseSoraFGResources()
         slot.uiHandle = nullptr;
     }
     _lastSoraFGFrame = 0;
+    _lastSoraFGApplicationFrame = 0;
+    _lastSoraFGReplayFrame = 0;
+    _lastSoraFGFinalResourceIdentity = 0;
+    _lastSoraFGHudlessResourceIdentity = 0;
+    _lastSoraFGUIResourceIdentity = 0;
+    _lastSoraFGOpenedHudlessIdentity = 0;
+    _lastSoraFGOpenedUIIdentity = 0;
+    _lastSoraFGReplayDrawCount = 0;
+    _lastSoraFGExperimentMode = -1;
     _soraFGInteropLogged = false;
 }
 
@@ -1451,6 +1493,19 @@ bool Dx11wDx12SC::_CopyDx11SharedToDx12FGBackBuffer(UINT dx11Index)
         LOG_ERROR("FG GetBuffer({}) failed: {:X}", fgIndex, (UINT) result);
         _copyCommandLists[copySlot]->Close();
         return false;
+    }
+
+    if (Config::Instance()->FGDLSSGSoraUIFrameDiagnostics.value_or_default() && _lastSoraFGFrame != 0)
+    {
+        LOG_INFO("[SoraFGFrame] provider={} app={} replay={} replayDraws={} mode={} dx11Index={} bridgeSlot={} "
+                 "fgBackbufferIndex={} producerFinal={:X} producerHudless={:X} producerUI={:X} "
+                 "openedHudless={:X} openedUI={:X} bridgeFinal={:X} fgBackbuffer={:X} optiFGFrame={} optiFGIndex={}",
+                 _lastSoraFGFrame, _lastSoraFGApplicationFrame, _lastSoraFGReplayFrame,
+                 _lastSoraFGReplayDrawCount, _lastSoraFGExperimentMode, dx11Index, copySlot, fgIndex,
+                 _lastSoraFGFinalResourceIdentity, _lastSoraFGHudlessResourceIdentity,
+                 _lastSoraFGUIResourceIdentity, _lastSoraFGOpenedHudlessIdentity, _lastSoraFGOpenedUIIdentity,
+                 reinterpret_cast<uint64_t>(_openedDx11BackBuffers[copySlot]),
+                 reinterpret_cast<uint64_t>(fgBackBuffer), _fg->FrameCount(), _fg->GetIndex());
     }
 
     auto sourceBefore = _openedDx11BackBufferStates[copySlot];

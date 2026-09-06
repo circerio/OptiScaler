@@ -608,6 +608,14 @@ class Config
     // DLSSG
     CustomOptional<int> FGDLSSGInterpolationCount { 1 }; // For Opti's own SL instance
     CustomOptional<bool> FGDLSSGUseGamesReflexMarkers { true };
+    // Sora-only diagnostic control: -1 disables the deferred-marker control;
+    // 0/1/2 are recomposition off, UIAlpha, and explicit UI RGBA. 3/4 add a
+    // static synthetic RGBA control with recomposition off/on; 5/6 are the
+    // corresponding constant-velocity pair. 7/8 are F10-armed original-marker
+    // frozen-transform / frozen-appearance linear-motion controls. 9 repeats
+    // mode 8 with DLSSG's interpolated-only diagnostic flag.
+    CustomOptional<int> FGDLSSGSoraUIExperimentMode { -1 };
+    CustomOptional<bool> FGDLSSGSoraUIFrameDiagnostics { false };
     CustomOptional<int, NoDefault>
         FGDLSSGOverrideInterpolationCount; // For overriding game's value sent to SL, could be Nvngx FG, could be noFG
                                            // but someone just uses real DLSSG

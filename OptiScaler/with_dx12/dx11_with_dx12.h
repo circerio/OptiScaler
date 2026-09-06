@@ -123,6 +123,9 @@ class Dx11WithDx12
     inline static UINT64 UpscalerLocalFrameId = 0;
     inline static UINT64 LastPreparedUpscalerFrameId = 0;
     inline static ResourceMask LastPreparedUpscalerMask = ResourceMask::None;
+    inline static float SoraFGMotionVectorScaleX = 0.0f;
+    inline static float SoraFGMotionVectorScaleY = 0.0f;
+    inline static UINT64 SoraFGMotionVectorScaleFrameId = 0;
 
     static bool CopyTextureFrom11To12(ID3D11Resource* InResource, D3D11_TEXTURE2D_RESOURCE_C* OutResource, bool InCopy,
                                       bool InDepth, bool InDontUseNTShared);
@@ -154,6 +157,13 @@ class Dx11WithDx12
 
     static UINT64 GetLastPreparedUpscalerFrameId();
     static ResourceMask GetLastPreparedUpscalerMask();
+
+    // The Sora RenoDX integration supplements a late, world-space 2D marker in
+    // the persistent D3D11 MV copy after DLSS SR and before the Present fence.
+    // Keep its scale tied to the exact prepared cache frame so a mode switch can
+    // never combine a new texture with stale motion-vector units.
+    static void SetSoraFGMotionVectorScale(float x, float y, UINT64 frameId);
+    static bool GetSoraFGMotionVectorScale(float* x, float* y, UINT64* frameId);
 
     static void ClearLastPreparedUpscalerFrameState();
     static bool HasPreparedUpscalerResources(ResourceMask mask, UINT64 frameId = 0);

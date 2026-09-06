@@ -369,8 +369,16 @@ bool DLSSG_Dx12::Dispatch()
                                             _frameResources[fIndex][FG_ResourceType::HudlessColor].GetResource() !=
                                                 nullptr &&
                                             _frameResources[fIndex][FG_ResourceType::UIColor].GetResource() != nullptr;
+    const auto soraUiExperimentMode = Config::Instance()->FGDLSSGSoraUIExperimentMode.value_or_default();
+    const bool recompositionRequested = soraUiExperimentMode == 1 || soraUiExperimentMode == 2 ||
+                                        soraUiExperimentMode == 4 || soraUiExperimentMode == 6 ||
+                                        soraUiExperimentMode == 7 || soraUiExperimentMode == 8 ||
+                                        soraUiExperimentMode == 9 || soraUiExperimentMode == 10;
+    const bool recompositionActive = haveRecompositionResources && recompositionRequested;
     options.enableUserInterfaceRecomposition =
-        haveRecompositionResources ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+        recompositionActive ? sl::Boolean::eTrue : sl::Boolean::eFalse;
+    if (soraUiExperimentMode == 9)
+        options.flags |= sl::DLSSGFlags::eShowOnlyInterpolatedFrame;
 
     if (haveRecompositionResources)
     {
@@ -384,11 +392,19 @@ bool DLSSG_Dx12::Dispatch()
         options.colorBufferFormat = static_cast<uint32_t>(DXGI_FORMAT_R10G10B10A2_UNORM);
     }
 
-    static std::optional<bool> lastRecompositionState;
-    if (!lastRecompositionState.has_value() || lastRecompositionState.value() != haveRecompositionResources)
+    static std::optional<int> lastRecompositionMode;
+    const int effectiveRecompositionMode = !haveRecompositionResources ? -2 : soraUiExperimentMode;
+    if (!lastRecompositionMode.has_value() || lastRecompositionMode.value() != effectiveRecompositionMode)
     {
-        LOG_INFO("DLSSG UI recomposition: {}", haveRecompositionResources ? "enabled" : "disabled");
-        lastRecompositionState = haveRecompositionResources;
+        const auto uiFormat = haveRecompositionResources
+                                  ? _frameResources[fIndex][FG_ResourceType::UIColor].GetResource()->GetDesc().Format
+                                  : DXGI_FORMAT_UNKNOWN;
+        LOG_INFO("DLSSG UI recomposition: {}, Sora experiment mode {}, UI input {} (format {}), "
+                 "show-only-interpolated {}",
+                 recompositionActive ? "enabled" : "disabled", soraUiExperimentMode,
+                 uiFormat == DXGI_FORMAT_R16_FLOAT ? "UIAlpha" : "UIColorAndAlpha", (UINT) uiFormat,
+                 soraUiExperimentMode == 9 ? "enabled" : "disabled");
+        lastRecompositionMode = effectiveRecompositionMode;
     }
 
     if (Config::Instance()->FGDLSSGForceDMFG.value_or_default())
@@ -429,6 +445,23 @@ bool DLSSG_Dx12::Dispatch()
     if (!_haveHudless.has_value())
     {
         _haveHudless = IsUsingHudless(fIndex);
+    }
+
+    // Resources imported by the DX11 bridge are valid until Present, but they
+    // were not tagged by an original Streamline integration. HUD-less already
+    // gets re-submitted here for that reason; UI needs the same treatment.
+    // Without this, SetResource accepts and tracks the custom UI resource while
+    // skipping slSetTagForFrame, so DLSS-G silently interpolates the UI as scene.
+    if (!_noUi[fIndex])
+    {
+        auto res = &_frameResources[fIndex][FG_ResourceType::UIColor];
+        if (res->validity != FG_ResourceValidity::ValidNow &&
+            res->validity != FG_ResourceValidity::JustTrackCmdlist)
+        {
+            res->validity = FG_ResourceValidity::UntilPresentFromDispatch;
+            res->frameIndex = fIndex;
+            SetResource(res);
+        }
     }
 
     if (!_noHudless[fIndex])
@@ -596,6 +629,16 @@ bool DLSSG_Dx12::Dispatch()
     }
 
     LOG_DEBUG("Result: Ok");
+    if (Config::Instance()->FGDLSSGSoraUIFrameDiagnostics.value_or_default())
+    {
+        LOG_INFO("[SoraFGToken] tokenFrame={} dispatchFrame={} fIndex={} frameCount={} fgPresentId={} "
+                 "recomposition={} uiFormat={}",
+                 frameId, willDispatchFrame, fIndex, _frameCount, _fgFramePresentId,
+                 recompositionActive ? "on" : "off",
+                 haveRecompositionResources
+                     ? (UINT) _frameResources[fIndex][FG_ResourceType::UIColor].GetResource()->GetDesc().Format
+                     : (UINT) DXGI_FORMAT_UNKNOWN);
+    }
 
     return true;
 }
@@ -833,6 +876,21 @@ bool DLSSG_Dx12::Present()
 {
     auto fIndex = GetIndexWillBeDispatched();
     LOG_DEBUG("fIndex: {}", fIndex);
+
+    if (Config::Instance()->FGDLSSGSoraUIFrameDiagnostics.value_or_default())
+    {
+        sl::DLSSGState diagnosticState {};
+        sl::DLSSGOptions diagnosticOptions {};
+        const auto stateResult = StreamlineProxy::DLSSGGetState()(viewport, diagnosticState, &diagnosticOptions);
+        auto* completionFence =
+            reinterpret_cast<ID3D12Fence*>(diagnosticState.inputsProcessingCompletionFence);
+        LOG_INFO("[SoraFGFence] fIndex={} frameCount={} stateResult={} status={:X} fence={:X} "
+                 "requiredValue={} completedValue={}",
+                 fIndex, _frameCount, magic_enum::enum_name(stateResult), (UINT) diagnosticState.status,
+                 reinterpret_cast<uint64_t>(completionFence),
+                 diagnosticState.lastPresentInputsProcessingCompletionFenceValue,
+                 completionFence != nullptr ? completionFence->GetCompletedValue() : 0);
+    }
 
     if (Config::Instance()->FGDrawUIOverFG.value_or_default())
     {
@@ -1121,7 +1179,12 @@ bool DLSSG_Dx12::SetResource(Dx12Resource* inputResource)
             break;
 
         case FG_ResourceType::UIColor:
-            resourceTag.type = sl::kBufferTypeUIColorAndAlpha;
+            // A single-channel resource follows NVIDIA's preferred UI-alpha
+            // path. Four-channel resources retain the generic color+alpha
+            // behavior for every other integration.
+            resourceTag.type = fResource->GetResource()->GetDesc().Format == DXGI_FORMAT_R16_FLOAT
+                                   ? sl::kBufferTypeUIAlpha
+                                   : sl::kBufferTypeUIColorAndAlpha;
             break;
 
         case FG_ResourceType::Velocity:
@@ -1159,6 +1222,29 @@ bool DLSSG_Dx12::SetResource(Dx12Resource* inputResource)
             auto result = StreamlineProxy::SetTagForFrame()(*frameToken, viewport, &resourceTag, 1, fResource->cmdList);
             LOG_DEBUG("SetTagForFrame, frameId: {}, type: {} result: {} ({})", frameId, magic_enum::enum_name(type),
                       magic_enum::enum_name(result), (int32_t) result);
+
+            if (Config::Instance()->FGDLSSGSoraUIFrameDiagnostics.value_or_default() &&
+                (resourceTag.type == sl::kBufferTypeHUDLessColor || resourceTag.type == sl::kBufferTypeUIAlpha ||
+                 resourceTag.type == sl::kBufferTypeUIColorAndAlpha))
+            {
+                LOG_INFO("[SoraFGTag] tokenFrame={} fIndex={} fgType={} slTag={} resource={:X} format={} "
+                         "state={:X} lifecycle={} extent={},{},{}x{} result={}",
+                         frameId, fIndex, magic_enum::enum_name(type), resourceTag.type,
+                         reinterpret_cast<uint64_t>(fResource->GetResource()),
+                         (UINT) fResource->GetResource()->GetDesc().Format, (UINT) fResource->state,
+                         (UINT) resourceTag.lifecycle, resourceTag.extent.left, resourceTag.extent.top,
+                         resourceTag.extent.width, resourceTag.extent.height, magic_enum::enum_name(result));
+            }
+
+            if (resourceTag.type == sl::kBufferTypeUIAlpha)
+            {
+                static std::atomic_bool uiAlphaTagLogged = false;
+                if (!uiAlphaTagLogged.exchange(true))
+                {
+                    LOG_INFO("DLSSG kBufferTypeUIAlpha submitted for frame {}: {} ({})", frameId,
+                             magic_enum::enum_name(result), (int32_t) result);
+                }
+            }
 
             if (result != sl::Result::eOk)
             {
