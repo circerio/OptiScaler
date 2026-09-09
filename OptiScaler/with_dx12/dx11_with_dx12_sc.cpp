@@ -115,6 +115,7 @@ struct SoraFGInteropResourcesV1
 
 using PFN_RenoDX_GetSoraFGResourcesV1 = BOOL (*)(SoraFGInteropResourcesV1* output);
 using PFN_RenoDX_SetSoraFGUIExperimentModeV1 = BOOL (*)(int32_t mode);
+using PFN_RenoDX_SetSoraFGMarkerVelocityV1 = BOOL (*)(float pixelsPerFrame);
 using PFN_RenoDX_NotifySoraFGFrameBoundaryV1 = BOOL (*)();
 using PFN_RenoDX_NotifyFalcomEnginePlusFrameBoundaryV1 = BOOL (*)();
 } // namespace
@@ -551,6 +552,19 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
     {
         LOG_ERROR("RenoDX Sora FG experiment control ABI is unavailable or rejected mode {}", experimentMode);
         return false;
+    }
+
+    if (experimentMode == 8 || experimentMode == 9)
+    {
+        const auto velocity = Config::Instance()->FGDLSSGSoraMarkerVelocityPixelsPerFrame.value_or_default();
+        const auto setVelocity = reinterpret_cast<PFN_RenoDX_SetSoraFGMarkerVelocityV1>(
+            GetProcAddress(module, "RenoDX_SetSoraFGMarkerVelocityV1"));
+        if (setVelocity == nullptr || !setVelocity(velocity))
+        {
+            LOG_ERROR("RenoDX Sora FG marker velocity ABI is unavailable or rejected {} px/application-frame",
+                      velocity);
+            return false;
+        }
     }
 
     SoraFGInteropResourcesV1 info {};

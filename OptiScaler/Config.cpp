@@ -242,6 +242,12 @@ bool Config::Reload(std::filesystem::path iniPath)
                 (FGDLSSGSoraUIExperimentMode.value() < -1 || FGDLSSGSoraUIExperimentMode.value() > 10))
                 FGDLSSGSoraUIExperimentMode.reset();
             FGDLSSGSoraUIFrameDiagnostics.set_from_config(readBool("DLSSG", "SoraUIFrameDiagnostics"));
+            FGDLSSGSoraMarkerVelocityPixelsPerFrame.set_from_config(
+                readFloat("DLSSG", "SoraMarkerVelocityPixelsPerFrame"));
+            if (FGDLSSGSoraMarkerVelocityPixelsPerFrame.has_value() &&
+                !(FGDLSSGSoraMarkerVelocityPixelsPerFrame.value() >= 0.0f &&
+                  FGDLSSGSoraMarkerVelocityPixelsPerFrame.value() <= 256.0f))
+                FGDLSSGSoraMarkerVelocityPixelsPerFrame.reset();
 
             FGDLSSGOverrideInterpolationCount.set_from_config(readInt("DLSSG", "OverrideInterpolationCount"));
             if (FGDLSSGOverrideInterpolationCount.has_value() &&
@@ -1033,6 +1039,8 @@ bool Config::SaveIni()
                      GetIntValue(Instance()->FGDLSSGSoraUIExperimentMode.value_for_config()).c_str());
         ini.SetValue("DLSSG", "SoraUIFrameDiagnostics",
                      GetBoolValue(Instance()->FGDLSSGSoraUIFrameDiagnostics.value_for_config()).c_str());
+        ini.SetValue("DLSSG", "SoraMarkerVelocityPixelsPerFrame",
+                     GetFloatValue(Instance()->FGDLSSGSoraMarkerVelocityPixelsPerFrame.value_for_config()).c_str());
         ini.SetValue("DLSSG", "OverrideInterpolationCount",
                      GetIntValue(Instance()->FGDLSSGOverrideInterpolationCount.value_for_config()).c_str());
         ini.SetValue("DLSSG", "FramerateTargetDMFG",

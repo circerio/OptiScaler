@@ -616,6 +616,8 @@ class Config
     // mode 8 with DLSSG's interpolated-only diagnostic flag.
     CustomOptional<int> FGDLSSGSoraUIExperimentMode { -1 };
     CustomOptional<bool> FGDLSSGSoraUIFrameDiagnostics { false };
+    // Mode 8/9 frozen-marker translation speed in output pixels per application frame.
+    CustomOptional<float> FGDLSSGSoraMarkerVelocityPixelsPerFrame { 2.0f };
     CustomOptional<int, NoDefault>
         FGDLSSGOverrideInterpolationCount; // For overriding game's value sent to SL, could be Nvngx FG, could be noFG
                                            // but someone just uses real DLSSG
