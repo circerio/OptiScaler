@@ -239,7 +239,7 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             FGDLSSGSoraUIExperimentMode.set_from_config(readInt("DLSSG", "SoraUIExperimentMode"));
             if (FGDLSSGSoraUIExperimentMode.has_value() &&
-                (FGDLSSGSoraUIExperimentMode.value() < -1 || FGDLSSGSoraUIExperimentMode.value() > 11))
+                (FGDLSSGSoraUIExperimentMode.value() < -1 || FGDLSSGSoraUIExperimentMode.value() > 12))
                 FGDLSSGSoraUIExperimentMode.reset();
             FGDLSSGSoraUIFrameDiagnostics.set_from_config(readBool("DLSSG", "SoraUIFrameDiagnostics"));
             FGDLSSGSoraMarkerVelocityPixelsPerFrame.set_from_config(

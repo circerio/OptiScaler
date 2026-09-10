@@ -613,7 +613,9 @@ class Config
     // static synthetic RGBA control with recomposition off/on; 5/6 are the
     // corresponding constant-velocity pair. 7/8 are F10-armed original-marker
     // frozen-transform / frozen-appearance linear-motion controls. 9 repeats
-    // mode 8 with DLSSG's interpolated-only diagnostic flag.
+    // mode 8 with DLSSG's interpolated-only diagnostic flag. Mode 11 adds the
+    // current-color bias mask. Mode 12 retains one mode-8 snapshot while F8
+    // toggles only UI recomposition for an in-process A/B.
     CustomOptional<int> FGDLSSGSoraUIExperimentMode { -1 };
     CustomOptional<bool> FGDLSSGSoraUIFrameDiagnostics { false };
     // Mode 8/9 frozen-marker translation speed in output pixels per application frame.

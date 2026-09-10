@@ -15,6 +15,30 @@
 
 using namespace DirectX;
 
+namespace
+{
+using PFN_RenoDX_GetSoraFGUIRecompositionABV1 = BOOL (*)(BOOL* enabled);
+
+bool GetSoraFGUIRecompositionAB(bool& enabled)
+{
+    const auto module = GetModuleHandleW(L"renodx-falcomengine.addon64");
+    if (module == nullptr)
+        return false;
+
+    const auto getRecomposition = reinterpret_cast<PFN_RenoDX_GetSoraFGUIRecompositionABV1>(
+        GetProcAddress(module, "RenoDX_GetSoraFGUIRecompositionABV1"));
+    if (getRecomposition == nullptr)
+        return false;
+
+    BOOL value = FALSE;
+    if (!getRecomposition(&value))
+        return false;
+
+    enabled = value != FALSE;
+    return true;
+}
+} // namespace
+
 feature_version DLSSG_Dx12::Version()
 {
     if (StreamlineProxy::LoadStreamline())
@@ -370,11 +394,22 @@ bool DLSSG_Dx12::Dispatch()
                                                 nullptr &&
                                             _frameResources[fIndex][FG_ResourceType::UIColor].GetResource() != nullptr;
     const auto soraUiExperimentMode = Config::Instance()->FGDLSSGSoraUIExperimentMode.value_or_default();
+    bool recompositionABEnabled = false;
+    const bool recompositionABAvailable =
+        soraUiExperimentMode != 12 || GetSoraFGUIRecompositionAB(recompositionABEnabled);
+    if (!recompositionABAvailable)
+    {
+        static std::atomic_bool recompositionABErrorLogged = false;
+        if (!recompositionABErrorLogged.exchange(true))
+            LOG_ERROR("Mode 12 requires RenoDX_GetSoraFGUIRecompositionABV1; disabling UI recomposition");
+    }
     const bool recompositionRequested = soraUiExperimentMode == 1 || soraUiExperimentMode == 2 ||
                                          soraUiExperimentMode == 4 || soraUiExperimentMode == 6 ||
                                          soraUiExperimentMode == 7 || soraUiExperimentMode == 8 ||
                                          soraUiExperimentMode == 9 || soraUiExperimentMode == 10 ||
-                                         soraUiExperimentMode == 11;
+                                         soraUiExperimentMode == 11 ||
+                                         (soraUiExperimentMode == 12 && recompositionABAvailable &&
+                                          recompositionABEnabled);
     const bool recompositionActive = haveRecompositionResources && recompositionRequested;
     options.enableUserInterfaceRecomposition =
         recompositionActive ? sl::Boolean::eTrue : sl::Boolean::eFalse;
@@ -394,7 +429,11 @@ bool DLSSG_Dx12::Dispatch()
     }
 
     static std::optional<int> lastRecompositionMode;
-    const int effectiveRecompositionMode = !haveRecompositionResources ? -2 : soraUiExperimentMode;
+    const int effectiveRecompositionMode = !haveRecompositionResources
+                                               ? -2
+                                               : (soraUiExperimentMode == 12
+                                                      ? (recompositionABEnabled ? 1201 : 1200)
+                                                      : soraUiExperimentMode);
     if (!lastRecompositionMode.has_value() || lastRecompositionMode.value() != effectiveRecompositionMode)
     {
         const auto uiFormat = haveRecompositionResources

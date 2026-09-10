@@ -559,7 +559,7 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
         return false;
     }
 
-    if (experimentMode == 8 || experimentMode == 9 || experimentMode == 11)
+    if (experimentMode == 8 || experimentMode == 9 || experimentMode == 11 || experimentMode == 12)
     {
         const auto velocity = Config::Instance()->FGDLSSGSoraMarkerVelocityPixelsPerFrame.value_or_default();
         const auto setVelocity = reinterpret_cast<PFN_RenoDX_SetSoraFGMarkerVelocityV1>(
