@@ -371,9 +371,10 @@ bool DLSSG_Dx12::Dispatch()
                                             _frameResources[fIndex][FG_ResourceType::UIColor].GetResource() != nullptr;
     const auto soraUiExperimentMode = Config::Instance()->FGDLSSGSoraUIExperimentMode.value_or_default();
     const bool recompositionRequested = soraUiExperimentMode == 1 || soraUiExperimentMode == 2 ||
-                                        soraUiExperimentMode == 4 || soraUiExperimentMode == 6 ||
-                                        soraUiExperimentMode == 7 || soraUiExperimentMode == 8 ||
-                                        soraUiExperimentMode == 9 || soraUiExperimentMode == 10;
+                                         soraUiExperimentMode == 4 || soraUiExperimentMode == 6 ||
+                                         soraUiExperimentMode == 7 || soraUiExperimentMode == 8 ||
+                                         soraUiExperimentMode == 9 || soraUiExperimentMode == 10 ||
+                                         soraUiExperimentMode == 11;
     const bool recompositionActive = haveRecompositionResources && recompositionRequested;
     options.enableUserInterfaceRecomposition =
         recompositionActive ? sl::Boolean::eTrue : sl::Boolean::eFalse;
@@ -448,10 +449,22 @@ bool DLSSG_Dx12::Dispatch()
     }
 
     // Resources imported by the DX11 bridge are valid until Present, but they
-    // were not tagged by an original Streamline integration. HUD-less already
-    // gets re-submitted here for that reason; UI needs the same treatment.
+    // were not tagged by an original Streamline integration. Re-submit every
+    // Streamline-facing imported resource here, on the dispatch frame token.
     // Without this, SetResource accepts and tracks the custom UI resource while
     // skipping slSetTagForFrame, so DLSS-G silently interpolates the UI as scene.
+    if (_frameResources[fIndex].contains(FG_ResourceType::BiasCurrentColor))
+    {
+        auto res = &_frameResources[fIndex][FG_ResourceType::BiasCurrentColor];
+        if (res->GetResource() != nullptr && res->validity != FG_ResourceValidity::ValidNow &&
+            res->validity != FG_ResourceValidity::JustTrackCmdlist)
+        {
+            res->validity = FG_ResourceValidity::UntilPresentFromDispatch;
+            res->frameIndex = fIndex;
+            SetResource(res);
+        }
+    }
+
     if (!_noUi[fIndex])
     {
         auto res = &_frameResources[fIndex][FG_ResourceType::UIColor];
@@ -1191,6 +1204,10 @@ bool DLSSG_Dx12::SetResource(Dx12Resource* inputResource)
             resourceTag.type = sl::kBufferTypeMotionVectors;
             break;
 
+        case FG_ResourceType::BiasCurrentColor:
+            resourceTag.type = sl::kBufferTypeBiasCurrentColorHint;
+            break;
+
         default:
             return false;
         }
@@ -1225,7 +1242,8 @@ bool DLSSG_Dx12::SetResource(Dx12Resource* inputResource)
 
             if (Config::Instance()->FGDLSSGSoraUIFrameDiagnostics.value_or_default() &&
                 (resourceTag.type == sl::kBufferTypeHUDLessColor || resourceTag.type == sl::kBufferTypeUIAlpha ||
-                 resourceTag.type == sl::kBufferTypeUIColorAndAlpha))
+                 resourceTag.type == sl::kBufferTypeUIColorAndAlpha ||
+                 resourceTag.type == sl::kBufferTypeBiasCurrentColorHint))
             {
                 LOG_INFO("[SoraFGTag] tokenFrame={} fIndex={} fgType={} slTag={} resource={:X} format={} "
                          "state={:X} lifecycle={} extent={},{},{}x{} result={}",
@@ -1242,6 +1260,16 @@ bool DLSSG_Dx12::SetResource(Dx12Resource* inputResource)
                 if (!uiAlphaTagLogged.exchange(true))
                 {
                     LOG_INFO("DLSSG kBufferTypeUIAlpha submitted for frame {}: {} ({})", frameId,
+                             magic_enum::enum_name(result), (int32_t) result);
+                }
+            }
+
+            if (resourceTag.type == sl::kBufferTypeBiasCurrentColorHint)
+            {
+                static std::atomic_bool biasCurrentColorTagLogged = false;
+                if (!biasCurrentColorTagLogged.exchange(true))
+                {
+                    LOG_INFO("DLSSG kBufferTypeBiasCurrentColorHint submitted for frame {}: {} ({})", frameId,
                              magic_enum::enum_name(result), (int32_t) result);
                 }
             }

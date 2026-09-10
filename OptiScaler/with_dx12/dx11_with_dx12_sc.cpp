@@ -83,13 +83,14 @@ DXGI_FORMAT ResolveBufferFormat(IDXGISwapChain* swapchain, IDXGISwapChain1* swap
     return DXGI_FORMAT_UNKNOWN;
 }
 
-constexpr uint32_t SORA_FG_INTEROP_VERSION = 2;
+constexpr uint32_t SORA_FG_INTEROP_VERSION = 3;
 constexpr uint32_t SORA_FG_FLAG_HUDLESS = 1u << 0;
 constexpr uint32_t SORA_FG_FLAG_UI = 1u << 1;
 constexpr uint32_t SORA_FG_FLAG_HDR10_PQ_BT2020 = 1u << 2;
 constexpr uint32_t SORA_FG_FLAG_UI_PREMULTIPLIED = 1u << 3;
 constexpr uint32_t SORA_FG_FLAG_UI_FP16 = 1u << 4;
 constexpr uint32_t SORA_FG_FLAG_UI_ALPHA_ONLY = 1u << 5;
+constexpr uint32_t SORA_FG_FLAG_BIAS_CURRENT_COLOR = 1u << 6;
 
 struct SoraFGInteropResourcesV1
 {
@@ -111,6 +112,10 @@ struct SoraFGInteropResourcesV1
     uint64_t uiResourceIdentity;
     uint32_t replayDrawCount;
     int32_t experimentMode;
+    uint32_t biasCurrentColorFormat;
+    uint32_t biasCurrentColorReserved;
+    HANDLE biasCurrentColorHandle;
+    uint64_t biasCurrentColorIdentity;
 };
 
 using PFN_RenoDX_GetSoraFGResourcesV1 = BOOL (*)(SoraFGInteropResourcesV1* output);
@@ -554,7 +559,7 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
         return false;
     }
 
-    if (experimentMode == 8 || experimentMode == 9)
+    if (experimentMode == 8 || experimentMode == 9 || experimentMode == 11)
     {
         const auto velocity = Config::Instance()->FGDLSSGSoraMarkerVelocityPixelsPerFrame.value_or_default();
         const auto setVelocity = reinterpret_cast<PFN_RenoDX_SetSoraFGMarkerVelocityV1>(
@@ -575,16 +580,20 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
         return false;
     }
 
+    const bool expectBiasCurrentColor = experimentMode == 11;
     const uint32_t requiredUiFlag = experimentMode >= 2 ? SORA_FG_FLAG_UI_PREMULTIPLIED
                                                         : SORA_FG_FLAG_UI_ALPHA_ONLY;
     const DXGI_FORMAT expectedUiFormat = experimentMode >= 2 ? DXGI_FORMAT_R16G16B16A16_FLOAT
                                                               : DXGI_FORMAT_R16_FLOAT;
     const uint32_t requiredFlags = SORA_FG_FLAG_HUDLESS | SORA_FG_FLAG_UI |
-                                   SORA_FG_FLAG_HDR10_PQ_BT2020 | SORA_FG_FLAG_UI_FP16 | requiredUiFlag;
+                                   SORA_FG_FLAG_HDR10_PQ_BT2020 | SORA_FG_FLAG_UI_FP16 | requiredUiFlag |
+                                   (expectBiasCurrentColor ? SORA_FG_FLAG_BIAS_CURRENT_COLOR : 0u);
     if ((info.flags & requiredFlags) != requiredFlags || info.hudlessHandle == nullptr || info.uiHandle == nullptr ||
         info.hudlessFormat != DXGI_FORMAT_R10G10B10A2_UNORM ||
         info.uiFormat != expectedUiFormat || info.width == 0 || info.height == 0 ||
         info.experimentMode != experimentMode ||
+        (expectBiasCurrentColor &&
+         (info.biasCurrentColorHandle == nullptr || info.biasCurrentColorFormat != DXGI_FORMAT_R16_FLOAT)) ||
         _bufferFormat != DXGI_FORMAT_R10G10B10A2_UNORM)
     {
         LOG_ERROR("RenoDX Sora FG resource contract mismatch. frame {}, mode {}/{}, flags {:X}, formats {}/{} size {}x{}",
@@ -612,7 +621,8 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
     SoraFGOpenedResources* opened = nullptr;
     for (auto& slot : _soraFGResources)
     {
-        if (slot.hudlessHandle == info.hudlessHandle && slot.uiHandle == info.uiHandle)
+        if (slot.hudlessHandle == info.hudlessHandle && slot.uiHandle == info.uiHandle &&
+            slot.biasCurrentColorHandle == info.biasCurrentColorHandle)
         {
             opened = &slot;
             break;
@@ -623,7 +633,7 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
     {
         for (auto& slot : _soraFGResources)
         {
-            if (slot.hudless == nullptr && slot.ui == nullptr)
+            if (slot.hudless == nullptr && slot.ui == nullptr && slot.biasCurrentColor == nullptr)
             {
                 opened = &slot;
                 break;
@@ -639,12 +649,15 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
         opened = &_soraFGResources[0];
     }
 
-    if (opened->hudless == nullptr || opened->ui == nullptr)
+    if (opened->hudless == nullptr || opened->ui == nullptr ||
+        (expectBiasCurrentColor && opened->biasCurrentColor == nullptr))
     {
         SafeRelease(opened->hudless);
         SafeRelease(opened->ui);
+        SafeRelease(opened->biasCurrentColor);
         opened->hudlessHandle = info.hudlessHandle;
         opened->uiHandle = info.uiHandle;
+        opened->biasCurrentColorHandle = info.biasCurrentColorHandle;
 
         auto result = _dx12Device->OpenSharedHandle(info.hudlessHandle, IID_PPV_ARGS(&opened->hudless));
         if (FAILED(result) || opened->hudless == nullptr)
@@ -661,15 +674,33 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
             return false;
         }
 
+        if (expectBiasCurrentColor)
+        {
+            result = _dx12Device->OpenSharedHandle(info.biasCurrentColorHandle,
+                                                   IID_PPV_ARGS(&opened->biasCurrentColor));
+            if (FAILED(result) || opened->biasCurrentColor == nullptr)
+            {
+                LOG_ERROR("OpenSharedHandle for RenoDX Sora bias-current-color failed: {:X}", (UINT) result);
+                SafeRelease(opened->hudless);
+                SafeRelease(opened->ui);
+                return false;
+            }
+        }
+
         const auto hudlessDesc = opened->hudless->GetDesc();
         const auto uiDesc = opened->ui->GetDesc();
         if (hudlessDesc.Width != info.width || hudlessDesc.Height != info.height ||
             hudlessDesc.Format != DXGI_FORMAT_R10G10B10A2_UNORM || uiDesc.Width != info.width ||
-            uiDesc.Height != info.height || uiDesc.Format != expectedUiFormat)
+            uiDesc.Height != info.height || uiDesc.Format != expectedUiFormat ||
+            (expectBiasCurrentColor &&
+             (opened->biasCurrentColor->GetDesc().Width != info.width ||
+              opened->biasCurrentColor->GetDesc().Height != info.height ||
+              opened->biasCurrentColor->GetDesc().Format != DXGI_FORMAT_R16_FLOAT)))
         {
             LOG_ERROR("Opened RenoDX Sora FG resource descriptions do not match the export contract");
             SafeRelease(opened->hudless);
             SafeRelease(opened->ui);
+            SafeRelease(opened->biasCurrentColor);
             return false;
         }
     }
@@ -693,15 +724,28 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
     ui.validity = FG_ResourceValidity::UntilPresent;
     ui.frameIndex = frameIndex;
 
-    // UI alone is inert without HUD-less/recomposition. Tag it first so an
-    // unexpected second-call failure cannot leave DLSSG consuming HUD-less
-    // while interpolating the final UI as part of the scene.
-    const bool uiAccepted = _fg->SetResource(&ui);
-    const bool hudlessAccepted = uiAccepted && _fg->SetResource(&hudless);
-    if (!hudlessAccepted || !uiAccepted)
+    Dx12Resource biasCurrentColor {};
+    if (expectBiasCurrentColor)
     {
-        LOG_WARN("RenoDX Sora FG resources were not accepted for frame {} (HUD-less {}, UI {})", info.frameId,
-                 hudlessAccepted, uiAccepted);
+        biasCurrentColor.type = FG_ResourceType::BiasCurrentColor;
+        biasCurrentColor.resource = opened->biasCurrentColor;
+        biasCurrentColor.width = info.width;
+        biasCurrentColor.height = info.height;
+        biasCurrentColor.state = D3D12_RESOURCE_STATE_COMMON;
+        biasCurrentColor.validity = FG_ResourceValidity::UntilPresent;
+        biasCurrentColor.frameIndex = frameIndex;
+    }
+
+    // Bias and UI are inert without HUD-less/recomposition. Tag them first so
+    // an unexpected later-call failure cannot leave DLSSG consuming HUD-less
+    // while interpolating the final UI as part of the scene.
+    const bool biasAccepted = !expectBiasCurrentColor || _fg->SetResource(&biasCurrentColor);
+    const bool uiAccepted = biasAccepted && _fg->SetResource(&ui);
+    const bool hudlessAccepted = uiAccepted && _fg->SetResource(&hudless);
+    if (!hudlessAccepted || !uiAccepted || !biasAccepted)
+    {
+        LOG_WARN("RenoDX Sora FG resources were not accepted for frame {} (HUD-less {}, UI {}, bias {})",
+                 info.frameId, hudlessAccepted, uiAccepted, biasAccepted);
         return false;
     }
 
@@ -710,16 +754,19 @@ bool Dx11wDx12SC::_ImportSoraFGResources()
     _lastSoraFGFinalResourceIdentity = info.finalResourceIdentity;
     _lastSoraFGHudlessResourceIdentity = info.hudlessResourceIdentity;
     _lastSoraFGUIResourceIdentity = info.uiResourceIdentity;
+    _lastSoraFGBiasCurrentColorIdentity = info.biasCurrentColorIdentity;
     _lastSoraFGOpenedHudlessIdentity = reinterpret_cast<uint64_t>(opened->hudless);
     _lastSoraFGOpenedUIIdentity = reinterpret_cast<uint64_t>(opened->ui);
+    _lastSoraFGOpenedBiasCurrentColorIdentity = reinterpret_cast<uint64_t>(opened->biasCurrentColor);
     _lastSoraFGReplayDrawCount = info.replayDrawCount;
     _lastSoraFGExperimentMode = info.experimentMode;
     _lastSoraFGFrame = info.frameId;
     if (!_soraFGInteropLogged)
     {
-        LOG_INFO("RenoDX Sora FG interop active: HUD-less R10 PQ/BT.2020 + {} (format {}), {}x{}, experiment mode {}",
-                 experimentMode >= 2 ? "premultiplied UI RGBA16F" : "UI alpha R16F", info.uiFormat, info.width,
-                 info.height, experimentMode);
+        LOG_INFO("RenoDX Sora FG interop active: HUD-less R10 PQ/BT.2020 + {} (format {}){}, {}x{}, experiment mode {}",
+                 experimentMode >= 2 ? "premultiplied UI RGBA16F" : "UI alpha R16F", info.uiFormat,
+                 expectBiasCurrentColor ? " + R16F bias-current-color" : "", info.width, info.height,
+                 experimentMode);
         _soraFGInteropLogged = true;
     }
     return true;
@@ -731,8 +778,10 @@ void Dx11wDx12SC::_ReleaseSoraFGResources()
     {
         SafeRelease(slot.hudless);
         SafeRelease(slot.ui);
+        SafeRelease(slot.biasCurrentColor);
         slot.hudlessHandle = nullptr;
         slot.uiHandle = nullptr;
+        slot.biasCurrentColorHandle = nullptr;
     }
     _lastSoraFGFrame = 0;
     _lastSoraFGApplicationFrame = 0;
@@ -740,8 +789,10 @@ void Dx11wDx12SC::_ReleaseSoraFGResources()
     _lastSoraFGFinalResourceIdentity = 0;
     _lastSoraFGHudlessResourceIdentity = 0;
     _lastSoraFGUIResourceIdentity = 0;
+    _lastSoraFGBiasCurrentColorIdentity = 0;
     _lastSoraFGOpenedHudlessIdentity = 0;
     _lastSoraFGOpenedUIIdentity = 0;
+    _lastSoraFGOpenedBiasCurrentColorIdentity = 0;
     _lastSoraFGReplayDrawCount = 0;
     _lastSoraFGExperimentMode = -1;
     _soraFGInteropLogged = false;
@@ -1513,11 +1564,14 @@ bool Dx11wDx12SC::_CopyDx11SharedToDx12FGBackBuffer(UINT dx11Index)
     {
         LOG_INFO("[SoraFGFrame] provider={} app={} replay={} replayDraws={} mode={} dx11Index={} bridgeSlot={} "
                  "fgBackbufferIndex={} producerFinal={:X} producerHudless={:X} producerUI={:X} "
-                 "openedHudless={:X} openedUI={:X} bridgeFinal={:X} fgBackbuffer={:X} optiFGFrame={} optiFGIndex={}",
+                 "producerBias={:X} openedHudless={:X} openedUI={:X} openedBias={:X} bridgeFinal={:X} "
+                 "fgBackbuffer={:X} optiFGFrame={} optiFGIndex={}",
                  _lastSoraFGFrame, _lastSoraFGApplicationFrame, _lastSoraFGReplayFrame,
                  _lastSoraFGReplayDrawCount, _lastSoraFGExperimentMode, dx11Index, copySlot, fgIndex,
                  _lastSoraFGFinalResourceIdentity, _lastSoraFGHudlessResourceIdentity,
-                 _lastSoraFGUIResourceIdentity, _lastSoraFGOpenedHudlessIdentity, _lastSoraFGOpenedUIIdentity,
+                 _lastSoraFGUIResourceIdentity, _lastSoraFGBiasCurrentColorIdentity,
+                 _lastSoraFGOpenedHudlessIdentity, _lastSoraFGOpenedUIIdentity,
+                 _lastSoraFGOpenedBiasCurrentColorIdentity,
                  reinterpret_cast<uint64_t>(_openedDx11BackBuffers[copySlot]),
                  reinterpret_cast<uint64_t>(fgBackBuffer), _fg->FrameCount(), _fg->GetIndex());
     }

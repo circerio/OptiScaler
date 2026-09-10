@@ -96,8 +96,10 @@ class DECLSPEC_UUID("23b064bb-482d-416c-93b1-829acedfb3d0") Dx11wDx12SC final : 
     {
         HANDLE hudlessHandle = nullptr;
         HANDLE uiHandle = nullptr;
+        HANDLE biasCurrentColorHandle = nullptr;
         ID3D12Resource* hudless = nullptr;
         ID3D12Resource* ui = nullptr;
+        ID3D12Resource* biasCurrentColor = nullptr;
     };
 
     IDXGISwapChain* _real = nullptr;
@@ -155,8 +157,10 @@ class DECLSPEC_UUID("23b064bb-482d-416c-93b1-829acedfb3d0") Dx11wDx12SC final : 
     uint64_t _lastSoraFGFinalResourceIdentity = 0;
     uint64_t _lastSoraFGHudlessResourceIdentity = 0;
     uint64_t _lastSoraFGUIResourceIdentity = 0;
+    uint64_t _lastSoraFGBiasCurrentColorIdentity = 0;
     uint64_t _lastSoraFGOpenedHudlessIdentity = 0;
     uint64_t _lastSoraFGOpenedUIIdentity = 0;
+    uint64_t _lastSoraFGOpenedBiasCurrentColorIdentity = 0;
     uint32_t _lastSoraFGReplayDrawCount = 0;
     int32_t _lastSoraFGExperimentMode = -1;
     bool _soraFGInteropLogged = false;
