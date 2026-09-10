@@ -444,6 +444,19 @@ bool DLSSG_Dx12::Dispatch()
                  recompositionActive ? "enabled" : "disabled", soraUiExperimentMode,
                  uiFormat == DXGI_FORMAT_R16_FLOAT ? "UIAlpha" : "UIColorAndAlpha", (UINT) uiFormat,
                  soraUiExperimentMode == 9 ? "enabled" : "disabled");
+        if (soraUiExperimentMode == 12 && haveRecompositionResources)
+        {
+            auto* hudlessResource = _frameResources[fIndex][FG_ResourceType::HudlessColor].GetResource();
+            auto* uiResource = _frameResources[fIndex][FG_ResourceType::UIColor].GetResource();
+            LOG_INFO("[SoraFGAB] recomposition={}, fIndex={}, HUDless={:X}/format{}, "
+                     "UIColorAndAlpha={:X}/format{}; producer/tag resources remain published in both states and "
+                     "Final stays on the unchanged presentation path",
+                     recompositionActive ? "ON" : "OFF", fIndex,
+                     reinterpret_cast<uint64_t>(hudlessResource),
+                     hudlessResource != nullptr ? (UINT) hudlessResource->GetDesc().Format : 0u,
+                     reinterpret_cast<uint64_t>(uiResource),
+                     uiResource != nullptr ? (UINT) uiResource->GetDesc().Format : 0u);
+        }
         lastRecompositionMode = effectiveRecompositionMode;
     }
 
