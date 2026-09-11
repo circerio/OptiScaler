@@ -12,13 +12,24 @@
 <br />
 
 > [!IMPORTANT]
-> This fork branch contains an experimental **DirectX 11 engine-aware DLSS Frame Generation proof of concept** for *Trails in the Sky 1st Chapter*. It is source-only, game-specific research and is not an official OptiScaler release. Start with the [1st Chapter engineering status](docs/ENGINEERING_STATUS_1ST_CHAPTER.md) and the dedicated [2nd Chapter handoff](docs/HANDOFF_2ND_CHAPTER.md); the original reports remain available in [English](TRAILS1ST_DX11_DLSSG_POC.md) and [Traditional Chinese](TRAILS1ST_DX11_DLSSG_POC.zh-TW.md).
-
-### Project status (2026-09-11)
-
-Working on 1st Chapter: DLSS Multi Frame Generation, Falcom-specific HUD separation/recomposition, RenoDX HDR coexistence, and the current responsiveness/frame-alignment profile. Still under investigation: fast moving billboard/marker behavior at 4X, complete HUD generalization, long-run stability, lifecycle changes, and a controlled comparison with newer OptiScaler upstream.
-
-Planned order: freeze 1st Chapter; validate/port the frozen implementation to 2nd Chapter; only after both titles are proven investigate engine-level generalization; ray tracing comes later. This branch does **not** claim 2nd Chapter support, universal Falcom Engine support, fully correct billboards, or superiority over current upstream.
+> ## Trails in the Sky 1st Chapter — DLSS MFG WIP
+>
+> This fork contains an early Falcom-specific implementation of DLSS Frame Generation / Multi Frame Generation for **Trails in the Sky 1st Chapter**. It is source-only, game-specific research and is not an official OptiScaler release.
+>
+> ### Current status
+> - DLSS FG / MFG integration: working
+> - RenoDX coexistence: working
+> - 2X MFG: recommended
+> - 3X MFG: functional
+> - White moving marker artifact: substantially improved at 2X
+> - 4X MFG: functional, but fast moving marker artifacts are still under investigation
+> - HUD / HUDFix: still under active development
+>
+> This is an **initial WIP version**, not a finished release.
+>
+> Source baseline: `trails1st-engineering-baseline-20260911`
+>
+> Detailed engineering documentation: [1st Chapter engineering status](docs/ENGINEERING_STATUS_1ST_CHAPTER.md). The dedicated [2nd Chapter handoff](docs/HANDOFF_2ND_CHAPTER.md) and the original reports in [English](TRAILS1ST_DX11_DLSSG_POC.md) / [Traditional Chinese](TRAILS1ST_DX11_DLSSG_POC.zh-TW.md) remain available for technical reference.
 
 ## Table of Contents
 
@@ -40,7 +51,7 @@ Planned order: freeze 1st Chapter; validate/port the frozen implementation to 2n
 <div align="center">
   <a href="https://github.com/optiscaler/OptiScaler/releases"><img src="https://img.shields.io/github/downloads/optiscaler/optiscaler/total?style=for-the-badge&logo=gitextensions&logoSize=auto&label=Total" alt="Total DL"></a>
   <a href="https://github.com/optiscaler/OptiScaler/releases/latest"><img src="https://img.shields.io/github/downloads/optiscaler/optiscaler/latest/total?style=for-the-badge&logo=gitextensions&logoSize=auto&label=Stable&color=green&logoColor=white" alt="Stable DL"></a>
-  <a href="https://github.com/optiscaler/OptiScaler/releases/tag/nightly"><img src="https://img.shields.io/github/downloads/optiscaler/OptiScaler/nightly/total?style=for-the-badge&logo=gitextensions&logoColor=white&logoSize=auto&label=Nightly&color=purple" alt="Nightly DL"></a>
+  <a href="https://github.com/optiscaler/OptiScaler/releases/tag/nightly"><img src="https://img.shields.io/github/downloads/optiscaler/OptiScaler/nightly/total?style=for-the-badge&logo=gitextensions&logoColor=white&label=Nightly" alt="Nightly DL"></a>
   <a href="https://github.com/optiscaler/OptiScaler/stargazers"><img src="https://img.shields.io/github/stars/optiscaler/optiscaler?style=for-the-badge&logo=githubsponsors&logoColor=white&label=S.T.A.R.S." alt="Stars"></a>
 </div>
 
@@ -199,4 +210,3 @@ This project uses [FreeType](https://gitlab.freedesktop.org/freetype/freetype) l
   </tr>
  </tbody>
 </table>
-
