@@ -1,0 +1,71 @@
+{
+  "schema_version": 1,
+  "as_of": "2026-09-11",
+  "project": "Trails in the Sky 1st Chapter DX11 engine-aware DLSSG/MFG",
+  "baseline": {
+    "tag": "trails1st-engineering-baseline-20260911",
+    "branch": "public/trails1st-engineering-handoff-20260911",
+    "optiscaler_implementation_parent": "c7f548b255427af9bd2b155f3026f651422c4527",
+    "optiscaler_upstream_base": "4f17a05da871a583b9313ee74d33acfcf074a03d",
+    "renodx_implementation_parent": "e04df8fafe7e2aff0c025dfd792712b0ffa29799",
+    "renodx_upstream_base": "1e7366dde741c551de218ea4b5c7190bcd6ac595",
+    "game_version": "1.0.5.0",
+    "game_exe_sha256": "9A8F3BE355D81C2D1E68494C51578F9F6A3C3EF8DBA9F445FCEE60CFE71A74AF"
+  },
+  "tested_system": {
+    "gpu": "NVIDIA GeForce RTX 5070 Ti",
+    "final_pipeline_driver": "616.56",
+    "latest_diagnostic_driver": "616.92",
+    "os_build": "10.0.26200",
+    "display": "3840x2160 240 Hz HDR, RGB 10 bpc"
+  },
+  "features": {
+    "fg_initialization": "PASS",
+    "dlss_fg": "PASS",
+    "mfg_2x": "PASS",
+    "mfg_3x": "PASS",
+    "mfg_4x": "PARTIAL",
+    "frame_pacing": "PARTIAL",
+    "latency_responsiveness": "PARTIAL",
+    "hud_separation": "PASS",
+    "hud_recomposition": "PASS",
+    "static_hud": "PASS",
+    "moving_white_marker": "PARTIAL",
+    "billboard_generalization": "FAIL",
+    "renodx": "PASS",
+    "hdr": "PASS",
+    "falcom_engine_plus": "PASS",
+    "combined_stack": "PARTIAL",
+    "stability": "PARTIAL",
+    "alt_tab": "PARTIAL",
+    "resolution_display_changes": "NOT TESTED"
+  },
+  "known_good_runtime": {
+    "interpolation_count": 1,
+    "effective_multiplier": "2X",
+    "allowed_frame_ahead": 0,
+    "sora_ui_experiment_mode": 2,
+    "sora_ui_frame_diagnostics": false,
+    "vsync": false,
+    "frame_limit": 0,
+    "falcom_engine_plus_domain_must_be_recorded": true
+  },
+  "blockers": [
+    "Fast white-marker motion has generated/intermediate-phase edge contamination at 4X",
+    "Black billboard variants are not handled",
+    "Long soak and resolution/fullscreen/HDR recreation matrix are incomplete"
+  ],
+  "source_paths": [
+    "OptiScaler/inputs/FG/Upscaler_Inputs_Dx11wDx12.cpp",
+    "OptiScaler/with_dx12/dx11_with_dx12_sc.cpp",
+    "OptiScaler/framegen/dlssg/DLSSG_Dx12.cpp",
+    "OptiScaler/Config.cpp",
+    "companion RenoDX: src/games/falcomengine/addon.cpp"
+  ],
+  "evidence": [
+    "docs/evidence/BILLBOARD_MARKER_FORENSICS.md",
+    "docs/evidence/PERFORMANCE_FALCOM_ENGINE_PLUS_ABA.md",
+    "TRAILS1ST_DX11_DLSSG_POC.md"
+  ],
+  "next_test": "Capture/read back generated output immediately after DLSSG and before the common HDR/presenter boundary"
+}

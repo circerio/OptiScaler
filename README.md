@@ -12,7 +12,13 @@
 <br />
 
 > [!IMPORTANT]
-> This fork branch contains an experimental **DirectX 11 engine-aware DLSS Frame Generation proof of concept** for *Trails in the Sky 1st Chapter*. It is source-only, game-specific research and is not an official OptiScaler release. See [the English technical report](TRAILS1ST_DX11_DLSSG_POC.md) or the [Traditional Chinese report](TRAILS1ST_DX11_DLSSG_POC.zh-TW.md).
+> This fork branch contains an experimental **DirectX 11 engine-aware DLSS Frame Generation proof of concept** for *Trails in the Sky 1st Chapter*. It is source-only, game-specific research and is not an official OptiScaler release. Start with the [1st Chapter engineering status](docs/ENGINEERING_STATUS_1ST_CHAPTER.md) and the dedicated [2nd Chapter handoff](docs/HANDOFF_2ND_CHAPTER.md); the original reports remain available in [English](TRAILS1ST_DX11_DLSSG_POC.md) and [Traditional Chinese](TRAILS1ST_DX11_DLSSG_POC.zh-TW.md).
+
+### Project status (2026-09-11)
+
+Working on 1st Chapter: DLSS Multi Frame Generation, Falcom-specific HUD separation/recomposition, RenoDX HDR coexistence, and the current responsiveness/frame-alignment profile. Still under investigation: fast moving billboard/marker behavior at 4X, complete HUD generalization, long-run stability, lifecycle changes, and a controlled comparison with newer OptiScaler upstream.
+
+Planned order: freeze 1st Chapter; validate/port the frozen implementation to 2nd Chapter; only after both titles are proven investigate engine-level generalization; ray tracing comes later. This branch does **not** claim 2nd Chapter support, universal Falcom Engine support, fully correct billboards, or superiority over current upstream.
 
 ## Table of Contents
 

@@ -33,12 +33,17 @@ This is engine-aware Frame Generation. It is not equivalent to Lossless Scaling,
 ## Current source references
 
 - OptiScaler upstream base: `4f17a05da871a583b9313ee74d33acfcf074a03d`
+- Frozen engineering branch/tag: `public/trails1st-engineering-handoff-20260911` / `trails1st-engineering-baseline-20260911`
+- Frozen implementation source parent: `c7f548b255427af9bd2b155f3026f651422c4527`
 - Previous public OptiScaler checkpoint before the 2026-09-05 optimization pass: `1726c716ebfba875a0cae0805282fd57a8cb8985`
 - RenoDX upstream base: `1e7366dde741c551de218ea4b5c7190bcd6ac595`
+- Frozen RenoDX implementation source parent: `e04df8fafe7e2aff0c025dfd792712b0ffa29799`
 - RenoDX game provider used by the final build: `9bf173f6d18b98beb003d15ba1496e25aa8bc8d8`
 - RenoDX provider branch: `https://github.com/circerio/renodx/tree/public/trails1st-dx11-dlssg-provider`
 
 The OptiScaler branch is intentionally kept as a proof-of-concept series. It still contains experimental history and game-specific coupling. It should be refactored into smaller generic changes before any upstream pull request.
+
+The engineering handoff deliberately does not merge the newer official OptiScaler DX11 resource-management/presenter work. At freeze time official `origin/master` was `d36a078fb79a7a36e5dd356e4e173fdd9c7e29ec`. Establish the frozen result first, then compare upstream changes individually.
 
 ## Pipeline classification
 
@@ -139,10 +144,13 @@ Dx11Upscaler = dlss
 Enabled = true
 FGInput = upscaler
 FGOutput = dlssg
+AllowedFrameAhead = 0
 
 [DLSSG]
 InterpolationCount = 1
 UseGamesReflexMarkers = false
+SoraUIExperimentMode = 2
+SoraUIFrameDiagnostics = false
 
 [OptiFG]
 UseDx11UpscalerOutputAsHudless = false
@@ -175,6 +183,8 @@ LoadReshade = true
 
 The old generic DX11 upscaler-output HUD-less option is deliberately disabled in the final HDR path. The RenoDX provider supplies a post-tone-map HUD-less resource matching the final HDR10 representation instead.
 
+`SoraUIExperimentMode=2` enables the verified explicit-RGBA white-marker replay path. It is not a general billboard fix. Modes 7–12 are diagnostic controls and must not be used as a normal playable profile.
+
 ## Building and installation
 
 1. Build this OptiScaler branch as `Release | x64` using the upstream build instructions.
@@ -199,6 +209,8 @@ These hashes document the local build check only; the binaries are not committed
 
 Clean PresentMon 2.3.1 captures used unique sessions and `--terminate_after_timed`. With the optimized high-quality provider, paired measurements on the matched test scene were:
 
+These measurements belong to the **Falcom Engine+ ON** performance domain. Do not compare them with FE+ OFF results.
+
 | Mode | Source time | Source FPS | Output FPS | Cost versus FG OFF |
 |---|---:|---:|---:|---:|
 | FG OFF | 17.7802 ms | 56.24 | 56.23 | — |
@@ -219,6 +231,7 @@ The original high-quality RenoDX producer cost approximately 0.58–0.64 ms/sour
 - The branch should be tested against upscaler/DLSSG lifecycle resets and resource-transition handling before upstreaming.
 - Performance cost and present pacing were measured with PresentMon and targeted internal timing. End-to-end click-to-photon latency still requires independent hardware instrumentation.
 - HDR screenshots captured through ordinary SDR tools are not reliable evidence of HDR luminance or color accuracy.
+- White moving markers are substantially improved at 2X, but fast 4X generated/intermediate phases retain thin edge/background contamination. Black billboard variants are not handled. See `docs/evidence/BILLBOARD_MARKER_FORENSICS.md`.
 
 ## Upstreaming recommendation
 

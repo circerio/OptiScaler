@@ -1,0 +1,49 @@
+{
+  "captured_at": "2026-09-11T13:16:02+08:00",
+  "game_root": "O:/SteamLibrary/steamapps/common/Sora No Kiseki the 1st",
+  "note": "Paths and hashes document the validated local deployment. Third-party/game binaries are not redistributed.",
+  "game": {
+    "file": "sora_1st.exe",
+    "version": "1.0.5.0",
+    "size": 11847168,
+    "sha256": "9A8F3BE355D81C2D1E68494C51578F9F6A3C3EF8DBA9F445FCEE60CFE71A74AF"
+  },
+  "files": [
+    {"path":"dxgi.dll","role":"OptiScaler proxy/current diagnostic build","version":"10.0.0.1","size":25646080,"sha256":"10BE0B75DC6AD6627F202ED9886AA13959DCE2AFABCB621EED81B1A4FBA4905B","modified":"2026-09-11T02:49:57.8434271+08:00","provenance":"OptiScaler implementation parent c7f548b255427af9bd2b155f3026f651422c4527"},
+    {"path":"renodx-falcomengine.addon64","role":"RenoDX 1st provider/current diagnostic build","version":"0.2026.0905.1515","size":1792000,"sha256":"16978C6245DCD333B10DC4670E72E9CFFAAF3AC7DA78547033549167223E935B","modified":"2026-09-11T02:48:14.0422746+08:00","provenance":"RenoDX implementation parent e04df8fafe7e2aff0c025dfd792712b0ffa29799"},
+    {"path":"renodx-falcomengine-plus.addon64","role":"Falcom Engine+","version":"0.2026.0830.1449","size":3621376,"sha256":"73BC24A236B46DE3DE4A67491D0095499BE94262A42BC91EF7D84E259EB27024","modified":"2026-08-30T22:50:09.7767076+08:00"},
+    {"path":"ReShade64.dll","role":"ReShade runtime","version":"6.8.0.2155","size":5592064,"sha256":"0CEE63F9C9F13F3AC909C5B4903F4DBB4B719A7AB3B4F13B0DEAF83C814B94F7","modified":"2026-08-02T18:09:24+08:00"},
+    {"path":"nvngx_dlss.dll","role":"NVIDIA DLSS SR runtime","version":"310.6.0.0","size":58830448,"sha256":"099B3E1E3AD3F226DE621FE570B26CC554CC775E2606BE23EB222D6245674070","modified":"2026-09-06T17:52:51.7006335+08:00"},
+    {"path":"OptiScaler/streamline/nvngx_dlssg.dll","role":"NVIDIA DLSSG runtime","version":"310.6.0.0","size":7499376,"sha256":"17E00FC66D32F348FA16D387D635AC1B994AA7317B3E6D968867D1EE77AF3564","modified":"2026-04-10T11:02:40+08:00"},
+    {"path":"OptiScaler/streamline/sl.common.dll","role":"Streamline host","version":"2.11.1.0","size":801408,"sha256":"9D39BF058D0DC64677FD4FAB28C02B0564E16764BFDBE775D8DC5B759489CBB2","modified":"2026-04-10T18:08:16+08:00"},
+    {"path":"OptiScaler/streamline/sl.dlss_g.dll","role":"Streamline DLSSG plugin","version":"2.11.1.0","size":578176,"sha256":"DAE3F24A690F3DEE3FBD89BDDE47FBEB6BF480CEE376ECFD0242A50E0BB6E6C6","modified":"2026-04-10T18:09:08+08:00"},
+    {"path":"OptiScaler/streamline/sl.interposer.dll","role":"Streamline interposer","version":"2.11.1.0","size":647808,"sha256":"98AC2097902686441D6CBD1182FCF5CB15E9E7FA0744BFDF176EC728A4A49F1A","modified":"2026-04-10T18:09:28+08:00"},
+    {"path":"OptiScaler/streamline/sl.pcl.dll","role":"Streamline PCL","version":"2.11.1.0","size":359552,"sha256":"4A7BB40F1328CFF599DE932D5FC73CFD58BD32F3E29F7C19FA464AB3E2AAA440","modified":"2026-04-10T18:10:08+08:00"},
+    {"path":"OptiScaler/streamline/sl.reflex.dll","role":"Streamline Reflex","version":"2.11.1.0","size":381056,"sha256":"CFBAED0B1C27D0BA415F67E2AECA32607ADF2B83BE084EE8AD49F7E34C89010C","modified":"2026-04-10T18:10:18+08:00"}
+  ],
+  "captured_runtime_state": {
+    "warning": "Diagnostic state at inventory time; not the playable baseline",
+    "AllowedFrameAhead": 0,
+    "InterpolationCount": 3,
+    "effective_multiplier": "4X",
+    "SoraUIExperimentMode": 12,
+    "SoraUIFrameDiagnostics": false,
+    "SoraMarkerVelocityPixelsPerFrame": 40.0,
+    "OverrideInterpolationCount": "auto",
+    "Dx11ResourcesValidUntilPresent": true,
+    "DisableHUDFix": true,
+    "DeferFGInputSyncToPresent": true,
+    "DedicatedInteropQueue": true,
+    "UseHDR10": true,
+    "ForceVsync": false,
+    "SyncInterval": 0,
+    "FramerateLimit": 0
+  },
+  "known_good_playable_overrides": {
+    "InterpolationCount": 1,
+    "effective_multiplier": "2X",
+    "SoraUIExperimentMode": 2,
+    "SoraUIFrameDiagnostics": false,
+    "SoraMarkerVelocityPixelsPerFrame": 2.0
+  }
+}
